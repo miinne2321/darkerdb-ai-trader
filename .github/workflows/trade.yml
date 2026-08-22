@@ -1,0 +1,40 @@
+name: DarkerDB AI Trader
+
+on:
+  schedule:
+    # 每3小时跑一次（Server酱免费版每天5条额度）
+    # 北京时间 = UTC+8，所以 0点/3点/6点... 对应 UTC 16点/19点/22点
+    - cron: '0 */3 * * *'
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+        
+      - name: Run AI Trader
+        env:
+          DARKERDB_KEY: ${{ secrets.DARKERDB_KEY }}
+          OPENROUTER_KEY: ${{ secrets.OPENROUTER_KEY }}
+          SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
+        run: python trader.py
+        
+      - name: Commit memory
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add price_memory.json
+          git commit -m "Update price memory" || echo "No changes"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
