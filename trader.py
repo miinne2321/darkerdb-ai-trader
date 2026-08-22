@@ -1,7 +1,8 @@
 """
 DarkerDB AI Trader - 云端版（Server酱推送）
-使用 /v2/price-checks 的 similar_listings 获取新鲜挂牌样本
-严格过滤最近2小时内的挂牌，去极值均价
+使用 /v2/price-checks 获取新鲜挂牌 + 近期成交
+优先 listings，不够时补充 sales
+精简版：只保留 10 个最热门物品
 """
 import os
 import json
@@ -14,93 +15,26 @@ DARKERDB_KEY = os.environ["DARKERDB_KEY"]
 OPENROUTER_KEY = os.environ["OPENROUTER_KEY"]
 SERVERCHAN_SENDKEY = os.environ["SERVERCHAN_SENDKEY"]
 
-# === 追踪的物品清单（物品名|品质）===
+# === 追踪的物品清单（10 个最热门物品）===
 WATCHLIST = [
-    ("Spectral Fabric", "epic"),
-    ("Arcane Essence", "unique"),
-    ("Gold Coin Bag", "unique"),
-    ("Troll's Blood", "epic"),
-    ("Gold Ore", "epic"),
-    ("Rubysilver Ore", "epic"),
-    ("Obsidian Ore", "epic"),
-    ("Copper Ore", "uncommon"),
-    ("Bone", "common"),
-    ("Phantom Flower", "rare"),
-    ("Lifeleaf", "rare"),
-    ("Tar", "common"),
-    ("Wardweed", "common"),
-    ("Bavin", "uncommon"),
-    ("Ruby (Royal)", "legendary"),
-    ("Blue Sapphire (Royal)", "legendary"),
-    ("Potion of Healing", "uncommon"),
-    ("Potion of Protection", "rare"),
-    ("Magic Protection Potion", "epic"),
-    ("Surgical Kit", "rare"),
-    ("Bandage", "rare"),
-    ("Lockpick", "common"),
-    ("Great Potion of Luck", "rare"),
-    ("Scraps", "epic"),
-    ("Hard Crab Shell", "uncommon"),
-    ("Cockatrice's Lucky Feather", "rare"),
-    ("Dark Matter", "epic"),
-    ("Banshee Sonnet", "epic"),
-    ("Cyclops Precious Mirror", "epic"),
-    ("Cave Trolls Precious Rock", "epic"),
-    ("Thick Forefoot", "epic"),
-    ("Ancient Scroll (Royal)", "legendary"),
-    ("Giant Horn", "epic"),
-    ("Cyclops Eye", "epic"),
-    ("Gold Crown (Royal)", "legendary"),
-    ("Gold Chalice (Royal)", "legendary"),
-    ("Gold Waterpot (Royal)", "legendary"),
-    ("Gold Goblet (Royal)", "legendary"),
-    ("Broken Skull", "poor"),
-    ("Moldy Bread", "poor"),
-    ("Frosted Feather", "rare"),
-    ("Antiquated Coin", "unique"),
-    ("Cockatrice's Egg", "rare"),
-    ("Gold Waterpot (Exquisite)", "rare"),
-    ("Saltvine", "rare"),
-    ("Sturdy Rope", "rare"),
-    ("Sturdy Log", "rare"),
-    ("Bone Powder", "epic"),
-    ("Centaur Hoof", "epic"),
-    ("Maggots", "common"),
-    ("Cracked Tusk", "common"),
-    ("Sturdy Cloth", "common"),
-    ("Billet", "common"),
-    ("Bowstring", "common"),
-    ("Torn Sail", "common"),
-    ("Bat Claw", "common"),
-    ("Sharp Sea Urchin Spine", "uncommon"),
-    ("Grave Essence", "uncommon"),
-    ("Blue Sapphire (Perfect)", "epic"),
-    ("Ruby (Perfect)", "epic"),
-    ("Ruby (Exquisite)", "rare"),
-    ("Emerald (Royal)", "legendary"),
-    ("Emerald (Exquisite)", "rare"),
-    ("Emerald (Ultimate)", "unique"),
-    ("Blue Sapphire (Exquisite)", "rare"),
-    ("Diamond (Royal)", "legendary"),
-    ("Golden Teeth", "rare"),
-    ("Silver Ingot", "epic"),
-    ("Potion of Clarity", "epic"),
-    ("Trap Disarming Kit", "uncommon"),
-    ("Lyre", "legendary"),
-    ("Lyre", "rare"),
-    ("Flute", "unique"),
-    ("Potion of Invisibility", "rare"),
-    ("Throwing Knife", "rare"),
-    ("Dynamite", "rare"),
-    ("Soul Heart", "epic"),
-    ("Lantern", "epic"),
-    ("Lantern", "rare"),
+    ("Troll's Blood", "epic"),        # 你点名要留
+    ("Gold Ore", "epic"),             # 基础材料，交易量大
+    ("Rubysilver Ore", "epic"),       # 基础材料，样本充足
+    ("Copper Ore", "uncommon"),       # 样本最多(50)，最稳定
+    ("Bone", "common"),               # 基础材料，稳定
+    ("Potion of Healing", "uncommon"),# 消耗品之王，最热门
+    ("Bandage", "rare"),              # 消耗品，样本最多(50)
+    ("Grave Essence", "uncommon"),    # 稳定交易品
+    ("Blue Sapphire (Perfect)", "epic"), # 宝石类代表
+    ("Ruby (Perfect)", "epic"),       # 宝石类，样本最多(46)
 ]
 
 # === 信号阈值 ===
 BUY_T = -15
 SELL_T = 20
-FRESH_WINDOW_HOURS = 2   # 只取最近2小时内的挂牌
+LISTING_WINDOW_HOURS = 6    # similar_listings 时间窗口
+SALE_WINDOW_HOURS = 24      # similar_sales 时间窗口
+MIN_SAMPLES = 3              # 最少样本数
 HISTORY_FILE = "price_memory.json"
 
 # === 工具函数 ===
@@ -148,17 +82,13 @@ def resolve_item_id(name):
             return item.get("id")
     return None
 
-def get_fresh_price_checks(item_id, rarity, max_age_hours=2):
+def get_fresh_price_checks(item_id, rarity, 
+                           listing_window_hours=LISTING_WINDOW_HOURS, 
+                           sale_window_hours=SALE_WINDOW_HOURS,
+                           min_samples=MIN_SAMPLES):
     """
-    使用 /v2/price-checks，只取 similar_listings 中最近 N 小时内的挂牌。
-    返回 dict: {
-        "prices": [float],
-        "sample_count": int,
-        "trimmed_avg": float,
-        "min_price": float,
-        "latest_listed_at": str,
-        "freshness": str,        # "fresh" / "empty"
-    }
+    使用 /v2/price-checks，优先取 similar_listings，
+    不够时补充 similar_sales。
     """
     params = {"item_id": item_id, "rarity": rarity}
     r = safe_get("https://api.darkerdb.com/v2/price-checks", params)
@@ -169,40 +99,49 @@ def get_fresh_price_checks(item_id, rarity, max_age_hours=2):
     if not body:
         return None
 
-    # 获取 similar_listings
-    listings = body.get("similar_listings", [])
-    if not listings:
-        return {
-            "prices": [],
-            "sample_count": 0,
-            "trimmed_avg": None,
-            "min_price": None,
-            "latest_listed_at": None,
-            "freshness": "empty",
-        }
+    now = datetime.now(timezone.utc)
+    listing_cutoff = now - timedelta(hours=listing_window_hours)
+    sale_cutoff = now - timedelta(hours=sale_window_hours)
 
-    # 计算时间阈值（UTC）
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
-
-    # 过滤新鲜挂牌
+    # 收集新鲜 listings
     fresh_prices = []
     latest_listed_at = None
-    for listing in listings:
+    for listing in body.get("similar_listings", []):
         listed_at = listing.get("listed_at")
         if not listed_at:
             continue
         try:
             lt = datetime.fromisoformat(listed_at.replace("Z", "+00:00"))
-            if lt < cutoff:
+            if lt < listing_cutoff:
                 continue
             if latest_listed_at is None or listed_at > latest_listed_at:
                 latest_listed_at = listed_at
         except:
             continue
-
         price = listing.get("price")
         if price and price > 0:
             fresh_prices.append(float(price))
+
+    source = "listings"
+    
+    # 如果 listings 不够，补充 sales
+    if len(fresh_prices) < min_samples:
+        for sale in body.get("similar_sales", []):
+            sold_at = sale.get("sold_at")
+            if not sold_at:
+                continue
+            try:
+                st = datetime.fromisoformat(sold_at.replace("Z", "+00:00"))
+                if st < sale_cutoff:
+                    continue
+            except:
+                continue
+            price = sale.get("price")
+            if price and price > 0:
+                fresh_prices.append(float(price))
+        
+        if len(fresh_prices) >= min_samples:
+            source = "mixed"
 
     if not fresh_prices:
         return {
@@ -212,9 +151,10 @@ def get_fresh_price_checks(item_id, rarity, max_age_hours=2):
             "min_price": None,
             "latest_listed_at": None,
             "freshness": "empty",
+            "source": None,
         }
 
-    # 去极值（IQR）
+    # IQR 去极值
     sorted_p = sorted(fresh_prices)
     n = len(sorted_p)
     min_price = sorted_p[0]
@@ -235,13 +175,16 @@ def get_fresh_price_checks(item_id, rarity, max_age_hours=2):
 
     trimmed_avg = sum(trimmed) / len(trimmed)
 
+    freshness = "fresh" if source == "listings" else "low"
+
     return {
         "prices": fresh_prices,
         "sample_count": n,
         "trimmed_avg": round(trimmed_avg, 2),
         "min_price": min_price,
         "latest_listed_at": latest_listed_at,
-        "freshness": "fresh",
+        "freshness": freshness,
+        "source": source,
     }
 
 
@@ -276,6 +219,21 @@ def add_memory(mem, key, today, price):
 
 
 # === AI 分析 ===
+def extract_json(text):
+    """从文本中提取第一个 JSON 对象"""
+    try:
+        return json.loads(text)
+    except:
+        pass
+    start = text.find('{')
+    end = text.rfind('}')
+    if start != -1 and end != -1 and end > start:
+        try:
+            return json.loads(text[start:end+1])
+        except:
+            pass
+    return None
+
 def analyze_with_ai(current_data, memory_context):
     prompt = f"""你是 Dark and Darker 游戏市场分析师 AI。基于提供的材料/消耗品价格数据，完成分析：
 
@@ -362,11 +320,10 @@ def push_to_serverchan(title, content):
         print(f"⚠️ 推送异常: {e}")
 
 
-def format_report(analysis_json):
-    try:
-        data = json.loads(analysis_json)
-    except:
-        return f"⚠️ AI 分析解析失败:\n{analysis_json[:1500]}"
+def format_report(analysis_text):
+    data = extract_json(analysis_text)
+    if not data:
+        return f"⚠️ AI 分析解析失败:\n{analysis_text[:1500]}"
     lines = [f"📊 **DarkerDB AI 市场分析报告** | {datetime.now().strftime('%Y-%m-%d %H:%M')}"]
     lines.append("=" * 46)
     analyses = data.get("analyses", [])
@@ -394,11 +351,11 @@ def format_report(analysis_json):
 
 # === 主流程 ===
 def main():
-    print("🚀 DarkerDB AI Trader 启动（/v2/price-checks 新鲜挂牌模式）...")
-    print(f"⏰ 时间窗口：最近 {FRESH_WINDOW_HOURS} 小时")
+    print("🚀 DarkerDB AI Trader 启动（精简版 · 10 个热门物品）...")
+    print(f"⏰ 挂牌窗口：最近 {LISTING_WINDOW_HOURS} 小时 | 成交窗口：最近 {SALE_WINDOW_HOURS} 小时")
     today = datetime.now().strftime("%Y-%m-%d")
     mem = load_memory()
-    print("🔍 查询市场价格（仅新鲜挂牌）...")
+    print("🔍 查询市场价格...")
     current_data = []
     skipped = []
     missing_ids = {}
@@ -412,19 +369,20 @@ def main():
             print(f"  ❌ {name}: 无法解析 item_id")
             continue
 
-        # 使用 price-checks 获取新鲜挂牌
-        result = get_fresh_price_checks(item_id, rarity, max_age_hours=FRESH_WINDOW_HOURS)
+        # 使用 price-checks
+        result = get_fresh_price_checks(item_id, rarity)
 
-        if not result or result["freshness"] != "fresh" or result["sample_count"] == 0:
-            msg = f"{name}|{rarity}: {FRESH_WINDOW_HOURS}小时内无新鲜挂牌"
+        if not result or result["freshness"] == "empty" or result["sample_count"] == 0:
+            msg = f"{name}|{rarity}: 无有效样本"
             print(f"  ⚠️ {msg}")
             skipped.append(msg)
             continue
 
         price = result["trimmed_avg"]
-        print(f"  ✅ {name}|{rarity}: 新鲜均价={price} "
+        source_label = {"listings": "挂牌", "mixed": "挂牌+成交", "sales": "成交"}.get(result["source"], "?")
+        print(f"  ✅ {name}|{rarity}: 均价={price} "
               f"(样本:{result['sample_count']} 最低:{result['min_price']} "
-              f"最新上架:{result['latest_listed_at']})")
+              f"来源:{source_label} 新鲜度:{result['freshness']})")
 
         # 计算偏离度
         series = get_price_series(mem, f"{name}|{rarity}")
@@ -437,7 +395,6 @@ def main():
                 hist_avg = price
                 dev = 0
         else:
-            # 首日：用当日最低价作为基准
             day_min = result["min_price"]
             if day_min and day_min > 0:
                 dev = ((price - day_min) / day_min) * 100
@@ -463,12 +420,12 @@ def main():
 
         add_memory(mem, f"{name}|{rarity}", today, price)
         mem[f"__id__{name}"] = item_id
-        time.sleep(1)  # 限流保护
+        time.sleep(1)
 
     if not current_data:
-        print("❌ 没有获取到任何新鲜价格数据")
+        print("❌ 没有获取到任何价格数据")
         if skipped:
-            print(f"⚠️ 跳过 {len(skipped)} 个物品（无新鲜挂牌）")
+            print(f"⚠️ 跳过 {len(skipped)} 个物品")
         return
 
     memory_context = {}
@@ -482,20 +439,20 @@ def main():
             }
 
     print("\n🤖 AI 分析中...")
-    analysis_json = analyze_with_ai(current_data, memory_context)
-    if not analysis_json:
+    analysis_text = analyze_with_ai(current_data, memory_context)
+    if not analysis_text:
         print("⚠️ AI 分析失败，使用基础报告")
         lines = [f"📊 价格报告 | {today}"]
         for e in current_data:
             emoji = {"BUY": "🟢", "SELL": "🔴", "HOLD": "⚪"}.get(e["signal"], "⚪")
-            lines.append(f"{emoji} {e['item']}: 新鲜均价={e['current_price']} (偏离{e['deviation_pct']}%) [样本:{e['sample_size']}]")
+            lines.append(f"{emoji} {e['item']}: 均价={e['current_price']} (偏离{e['deviation_pct']}%) [样本:{e['sample_size']}]")
         if skipped:
-            lines.append(f"\n⚠️ 跳过 {len(skipped)} 个物品（{FRESH_WINDOW_HOURS}小时内无新鲜挂牌）")
+            lines.append(f"\n⚠️ 跳过 {len(skipped)} 个物品")
         report = "\n".join(lines)
     else:
-        report = format_report(analysis_json)
+        report = format_report(analysis_text)
         if skipped:
-            report += f"\n\n⚠️ 另有 {len(skipped)} 个物品在{FRESH_WINDOW_HOURS}小时内无新鲜挂牌，未参与分析"
+            report += f"\n\n⚠️ 另有 {len(skipped)} 个物品无有效样本，未参与分析"
 
     save_memory(mem)
     print("📤 推送报告到微信...")
@@ -504,7 +461,7 @@ def main():
     print("\n" + "=" * 46)
     print(report[:2000])
     print(f"\n✅ 完成！报告已发送到微信")
-    print(f"📊 统计：{len(current_data)} 个物品有新鲜数据，{len(skipped)} 个被跳过")
+    print(f"📊 统计：{len(current_data)} 个物品有数据，{len(skipped)} 个被跳过")
 
 
 if __name__ == "__main__":
