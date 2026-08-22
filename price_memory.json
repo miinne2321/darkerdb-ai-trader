@@ -1,151 +1,151 @@
 {
   "Spectral Fabric|epic": {
     "prices": {
-      "2026-08-22": 1199.0
+      "2026-08-22": 14603.33
     }
   },
   "__id__Spectral Fabric": "id.item.spectral_fabric",
   "Arcane Essence|unique": {
     "prices": {
-      "2026-08-22": 650.0
+      "2026-08-22": 7430.0
     }
   },
   "__id__Arcane Essence": "id.item.arcane_essence",
   "Gold Coin Bag|unique": {
     "prices": {
-      "2026-08-22": 333.0
+      "2026-08-22": 4121.63
     }
   },
   "__id__Gold Coin Bag": "id.item.gold_coin_bag",
   "Troll's Blood|epic": {
     "prices": {
-      "2026-08-22": 1799.0
+      "2026-08-22": 2385.62
     }
   },
   "__id__Troll's Blood": "id.item.troll_blood",
   "Gold Ore|epic": {
     "prices": {
-      "2026-08-22": 33.17
+      "2026-08-22": 318.37
     }
   },
   "__id__Gold Ore": "id.item.gold_ores",
   "Rubysilver Ore|epic": {
     "prices": {
-      "2026-08-22": 63.8
+      "2026-08-22": 423.19
     }
   },
   "__id__Rubysilver Ore": "id.item.rubysilver_ores",
   "Obsidian Ore|epic": {
     "prices": {
-      "2026-08-22": 41.67
+      "2026-08-22": 315.76
     }
   },
   "__id__Obsidian Ore": "id.item.obsidian_ores",
   "Copper Ore|uncommon": {
     "prices": {
-      "2026-08-22": 11.0
+      "2026-08-22": 157.99
     }
   },
   "__id__Copper Ore": "id.item.copper_ores",
   "Bone|common": {
     "prices": {
-      "2026-08-22": 44.33
+      "2026-08-22": 301.99
     }
   },
   "__id__Bone": "id.item.bone",
   "Phantom Flower|rare": {
     "prices": {
-      "2026-08-22": 196.0
+      "2026-08-22": 588.96
     }
   },
   "__id__Phantom Flower": "id.item.phantom_flower",
   "Lifeleaf|rare": {
     "prices": {
-      "2026-08-22": 105.0
+      "2026-08-22": 342.74
     }
   },
   "__id__Lifeleaf": "id.item.lifeleaf",
   "Tar|common": {
     "prices": {
-      "2026-08-22": 19.0
+      "2026-08-22": 203.6
     }
   },
   "__id__Tar": "id.item.tar",
   "Wardweed|common": {
     "prices": {
-      "2026-08-22": 26.6
+      "2026-08-22": 142.25
     }
   },
   "__id__Wardweed": "id.item.wardweed",
   "Bavin|uncommon": {
     "prices": {
-      "2026-08-22": 50.0
+      "2026-08-22": 151.04
     }
   },
   "__id__Bavin": "id.item.bavin",
   "Ruby (Royal)|legendary": {
     "prices": {
-      "2026-08-22": 50.0
+      "2026-08-22": 428.25
     }
   },
   "__id__Ruby (Royal)": "id.item.ruby",
   "Blue Sapphire (Royal)|legendary": {
     "prices": {
-      "2026-08-22": 33.33
+      "2026-08-22": 387.63
     }
   },
   "__id__Blue Sapphire (Royal)": "id.item.blue_sapphire",
   "Potion of Healing|uncommon": {
     "prices": {
-      "2026-08-22": 11.0
+      "2026-08-22": 40.33
     }
   },
   "__id__Potion of Healing": "id.item.healing_potion",
   "Potion of Protection|rare": {
     "prices": {
-      "2026-08-22": 33.33
+      "2026-08-22": 126.74
     }
   },
   "__id__Potion of Protection": "id.item.protection_potion",
   "Magic Protection Potion|epic": {
     "prices": {
-      "2026-08-22": 55.33
+      "2026-08-22": 194.75
     }
   },
   "__id__Magic Protection Potion": "id.item.magic_protection_potion",
   "Surgical Kit|rare": {
     "prices": {
-      "2026-08-22": 50.0
+      "2026-08-22": 331.11
     }
   },
   "__id__Surgical Kit": "id.item.surgical_kit",
   "Bandage|rare": {
     "prices": {
-      "2026-08-22": 40.67
+      "2026-08-22": 135.82
     }
   },
   "__id__Bandage": "id.item.bandage",
   "Lockpick|common": {
     "prices": {
-      "2026-08-22": 4.0
+      "2026-08-22": 48.51
     }
   },
   "__id__Lockpick": "id.item.lockpick",
   "Scraps|epic": {
     "prices": {
-      "2026-08-22": 1.1
+      "2026-08-22": 62.26
     }
   },
   "__id__Scraps": "id.item.workshop_scraps",
   "Hard Crab Shell|uncommon": {
     "prices": {
-      "2026-08-22": 850.0
+      "2026-08-22": 1475.0
     }
   },
   "__id__Hard Crab Shell": "id.item.hard_crab_shell",
   "Cockatrice's Lucky Feather|rare": {
     "prices": {
-      "2026-08-22": 1850.0
+      "2026-08-22": 2581.0
     }
   },
   "__id__Cockatrice's Lucky Feather": "id.item.cockatrices_lucky_feather",
@@ -157,85 +157,85 @@
   "__id__Dark Matter": "id.item.dark_matter",
   "Banshee Sonnet|epic": {
     "prices": {
-      "2026-08-22": 1000.0
+      "2026-08-22": 1404.86
     }
   },
   "__id__Banshee Sonnet": "id.item.banshee_sonnet",
   "Cyclops Precious Mirror|epic": {
     "prices": {
-      "2026-08-22": 400.0
+      "2026-08-22": 588.0
     }
   },
   "__id__Cyclops Precious Mirror": "id.item.cyclops_precious_mirror",
   "Cave Trolls Precious Rock|epic": {
     "prices": {
-      "2026-08-22": 455.0
+      "2026-08-22": 744.0
     }
   },
   "__id__Cave Trolls Precious Rock": "id.item.cave_trolls_precious_rock",
   "Thick Forefoot|epic": {
     "prices": {
-      "2026-08-22": 300.0
+      "2026-08-22": 1500.0
     }
   },
   "__id__Thick Forefoot": "id.item.thick_forefoot",
   "Ancient Scroll (Royal)|legendary": {
     "prices": {
-      "2026-08-22": 620.0
+      "2026-08-22": 850.0
     }
   },
   "__id__Ancient Scroll (Royal)": "id.item.large_scroll",
   "Giant Horn|epic": {
     "prices": {
-      "2026-08-22": 199.0
+      "2026-08-22": 266.0
     }
   },
   "__id__Giant Horn": "id.item.giant_horn",
   "Cyclops Eye|epic": {
     "prices": {
-      "2026-08-22": 566.0
+      "2026-08-22": 800.0
     }
   },
   "__id__Cyclops Eye": "id.item.cyclops_eye",
   "Gold Crown (Royal)|legendary": {
     "prices": {
-      "2026-08-22": 444.0
+      "2026-08-22": 549.5
     }
   },
   "__id__Gold Crown (Royal)": "id.item.gold_crown",
   "Gold Chalice (Royal)|legendary": {
     "prices": {
-      "2026-08-22": 333.0
+      "2026-08-22": 497.5
     }
   },
   "__id__Gold Chalice (Royal)": "id.item.gold_chalice_b",
   "Gold Waterpot (Royal)|legendary": {
     "prices": {
-      "2026-08-22": 333.0
+      "2026-08-22": 517.67
     }
   },
   "__id__Gold Waterpot (Royal)": "id.item.gold_waterpot",
   "Gold Goblet (Royal)|legendary": {
     "prices": {
-      "2026-08-22": 311.0
+      "2026-08-22": 405.6
     }
   },
   "__id__Gold Goblet (Royal)": "id.item.gold_chalice_a",
   "Broken Skull|poor": {
     "prices": {
-      "2026-08-22": 33.0
+      "2026-08-22": 130.81
     }
   },
   "__id__Broken Skull": "id.item.broken_skull",
   "Moldy Bread|poor": {
     "prices": {
-      "2026-08-22": 50.0
+      "2026-08-22": 153.06
     }
   },
   "__id__Moldy Bread": "id.item.moldy_bread",
   "Frosted Feather|rare": {
     "prices": {
-      "2026-08-22": 86.67
+      "2026-08-22": 171.08
     }
   },
   "__id__Frosted Feather": "id.item.frosted_feather",
@@ -247,151 +247,151 @@
   "__id__Antiquated Coin": "id.item.antiquated_coin",
   "Cockatrice's Egg|rare": {
     "prices": {
-      "2026-08-22": 100.0
+      "2026-08-22": 275.0
     }
   },
   "__id__Cockatrice's Egg": "id.item.cockatrice_egg",
   "Gold Waterpot (Exquisite)|rare": {
     "prices": {
-      "2026-08-22": 120.0
+      "2026-08-22": 195.75
     }
   },
   "__id__Gold Waterpot (Exquisite)": "id.item.gold_waterpot",
   "Saltvine|rare": {
     "prices": {
-      "2026-08-22": 183.0
+      "2026-08-22": 200.0
     }
   },
   "__id__Saltvine": "id.item.saltvine",
   "Sturdy Rope|rare": {
     "prices": {
-      "2026-08-22": 90.0
+      "2026-08-22": 548.75
     }
   },
   "__id__Sturdy Rope": "id.item.sturdy_rope",
   "Bone Powder|epic": {
     "prices": {
-      "2026-08-22": 311.0
+      "2026-08-22": 389.5
     }
   },
   "__id__Bone Powder": "id.item.bone_powder",
   "Centaur Hoof|epic": {
     "prices": {
-      "2026-08-22": 111.0
+      "2026-08-22": 200.0
     }
   },
   "__id__Centaur Hoof": "id.item.centaur_hoof",
   "Maggots|common": {
     "prices": {
-      "2026-08-22": 39.0
+      "2026-08-22": 79.89
     }
   },
   "__id__Maggots": "id.item.maggots",
   "Cracked Tusk|common": {
     "prices": {
-      "2026-08-22": 50.0
+      "2026-08-22": 149.75
     }
   },
   "__id__Cracked Tusk": "id.item.cracked_tusk",
   "Sturdy Cloth|common": {
     "prices": {
-      "2026-08-22": 88.0
+      "2026-08-22": 261.0
     }
   },
   "__id__Sturdy Cloth": "id.item.sturdy_cloth",
   "Billet|common": {
     "prices": {
-      "2026-08-22": 8.0
+      "2026-08-22": 118.16
     }
   },
   "__id__Billet": "id.item.billet",
   "Bowstring|common": {
     "prices": {
-      "2026-08-22": 37.0
+      "2026-08-22": 221.59
     }
   },
   "__id__Bowstring": "id.item.bowstring",
   "Torn Sail|common": {
     "prices": {
-      "2026-08-22": 99.0
+      "2026-08-22": 1143.5
     }
   },
   "__id__Torn Sail": "id.item.torn_sail",
   "Bat Claw|common": {
     "prices": {
-      "2026-08-22": 850.0
+      "2026-08-22": 1799.75
     }
   },
   "__id__Bat Claw": "id.item.bat_claw",
   "Sharp Sea Urchin Spine|uncommon": {
     "prices": {
-      "2026-08-22": 611.0
+      "2026-08-22": 970.25
     }
   },
   "__id__Sharp Sea Urchin Spine": "id.item.sharp_sea_urchin_spine",
   "Grave Essence|uncommon": {
     "prices": {
-      "2026-08-22": 94.5
+      "2026-08-22": 356.77
     }
   },
   "__id__Grave Essence": "id.item.grave_essence",
   "Blue Sapphire (Perfect)|epic": {
     "prices": {
-      "2026-08-22": 7.0
+      "2026-08-22": 307.52
     }
   },
   "__id__Blue Sapphire (Perfect)": "id.item.blue_sapphire",
   "Ruby (Perfect)|epic": {
     "prices": {
-      "2026-08-22": 33.33
+      "2026-08-22": 276.54
     }
   },
   "__id__Ruby (Perfect)": "id.item.ruby",
   "Ruby (Exquisite)|rare": {
     "prices": {
-      "2026-08-22": 12.67
+      "2026-08-22": 42.67
     }
   },
   "__id__Ruby (Exquisite)": "id.item.ruby",
   "Emerald (Royal)|legendary": {
     "prices": {
-      "2026-08-22": 26.67
+      "2026-08-22": 106.83
     }
   },
   "__id__Emerald (Royal)": "id.item.emerald",
   "Emerald (Exquisite)|rare": {
     "prices": {
-      "2026-08-22": 15.0
+      "2026-08-22": 32.34
     }
   },
   "__id__Emerald (Exquisite)": "id.item.emerald",
   "Emerald (Ultimate)|unique": {
     "prices": {
-      "2026-08-22": 85.0
+      "2026-08-22": 729.6
     }
   },
   "__id__Emerald (Ultimate)": "id.item.emerald",
   "Blue Sapphire (Exquisite)|rare": {
     "prices": {
-      "2026-08-22": 25.0
+      "2026-08-22": 63.57
     }
   },
   "__id__Blue Sapphire (Exquisite)": "id.item.blue_sapphire",
   "Diamond (Royal)|legendary": {
     "prices": {
-      "2026-08-22": 100.0
+      "2026-08-22": 431.1
     }
   },
   "__id__Diamond (Royal)": "id.item.diamond",
   "Golden Teeth|rare": {
     "prices": {
-      "2026-08-22": 13.33
+      "2026-08-22": 14958.89
     }
   },
   "__id__Golden Teeth": "id.item.golden_teeth",
   "Silver Ingot|epic": {
     "prices": {
-      "2026-08-22": 60.0
+      "2026-08-22": 280.0
     }
   },
   "__id__Silver Ingot": "id.item.silver_ingots",
@@ -409,13 +409,13 @@
   "__id__Trap Disarming Kit": "id.item.trap_disarming_kit",
   "Lyre|legendary": {
     "prices": {
-      "2026-08-22": 2.0
+      "2026-08-22": 457.75
     }
   },
   "__id__Lyre": "id.item.lyre",
   "Lyre|rare": {
     "prices": {
-      "2026-08-22": 65.0
+      "2026-08-22": 295.33
     }
   },
   "Flute|unique": {
@@ -426,25 +426,25 @@
   "__id__Flute": "id.item.flute",
   "Potion of Invisibility|rare": {
     "prices": {
-      "2026-08-22": 27.67
+      "2026-08-22": 85.0
     }
   },
   "__id__Potion of Invisibility": "id.item.invisibility_potion",
   "Throwing Knife|rare": {
     "prices": {
-      "2026-08-22": 19.0
+      "2026-08-22": 70.88
     }
   },
   "__id__Throwing Knife": "id.item.throwing_knife",
   "Lantern|epic": {
     "prices": {
-      "2026-08-22": 42.0
+      "2026-08-22": 323.46
     }
   },
   "__id__Lantern": "id.item.lantern",
   "Lantern|rare": {
     "prices": {
-      "2026-08-22": 50.0
+      "2026-08-22": 98.38
     }
   },
   "Great Potion of Luck|rare": {
