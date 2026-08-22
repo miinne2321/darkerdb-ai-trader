@@ -1,6 +1,6 @@
 """
 DarkerDB AI Trader - 云端版（Server酱推送）
-修复：AI prompt 强制 JSON + 增强 JSON 提取 + Git 冲突处理
+每4小时运行一次，按时间戳记录价格，支持昼夜规律分析
 """
 import os
 import json
@@ -35,6 +35,7 @@ LISTING_WINDOW_HOURS = 12
 SALE_WINDOW_HOURS = 48
 MIN_SAMPLES = 1
 HISTORY_FILE = "price_memory.json"
+DATA_RETENTION_DAYS = 14   # 保留14天的数据
 DEBUG = True
 
 # === 工具函数 ===
@@ -183,37 +184,58 @@ def get_fresh_price_checks(item_id, rarity, listing_window_hours=LISTING_WINDOW_
         "freshness": "fresh" if source == "listings" else "low", "source": source,
     }
 
-# === 长期记忆 ===
+# === 长期记忆（支持时间戳） ===
 def load_memory():
     if os.path.exists(HISTORY_FILE):
-        try: return json.load(open(HISTORY_FILE, encoding="utf-8"))
-        except: pass
+        try:
+            data = json.load(open(HISTORY_FILE, encoding="utf-8"))
+            # 兼容旧格式：如果某个物品的 prices 是 {date: price}，转换为 {timestamp: price}
+            for key in list(data.keys()):
+                if key.startswith("__"):
+                    continue
+                prices = data[key].get("prices", {})
+                new_prices = {}
+                for k, v in prices.items():
+                    # 如果是 YYYY-MM-DD 格式，转为当天中午的时间戳
+                    if re.match(r'^\d{4}-\d{2}-\d{2}$', k):
+                        ts = f"{k}T12:00:00Z"
+                        new_prices[ts] = v
+                    else:
+                        new_prices[k] = v
+                data[key]["prices"] = new_prices
+            return data
+        except:
+            pass
     return {}
 
 def save_memory(mem):
     json.dump(mem, open(HISTORY_FILE, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
 
-def get_price_series(mem, key, days=30):
-    if key not in mem: return []
+def get_price_series(mem, key, hours=336):  # 默认取最近 14 天（336小时）
+    if key not in mem:
+        return []
     prices = mem[key].get("prices", {})
-    cut = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
-    return sorted([(k, v) for k, v in prices.items() if k >= cut])
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    series = [(k, v) for k, v in prices.items() if k >= cutoff]
+    return sorted(series)
 
-def add_memory(mem, key, today, price):
-    if key not in mem: mem[key] = {"prices": {}}
-    mem[key]["prices"][today] = price
+def add_memory(mem, key, timestamp, price):
+    if key not in mem:
+        mem[key] = {"prices": {}}
+    mem[key]["prices"][timestamp] = price
+    # 清理超过 DATA_RETENTION_DAYS 的旧数据
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=DATA_RETENTION_DAYS)).isoformat()
     prices = mem[key]["prices"]
-    old = [k for k in prices if k < (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")]
-    for k in old: del prices[k]
+    old = [k for k in prices if k < cutoff]
+    for k in old:
+        del prices[k]
 
 # === AI 分析 ===
 def extract_json(text):
-    # 方法1：直接解析
     try:
         return json.loads(text)
     except:
         pass
-    # 方法2：找第一个 { 和最后一个 }
     start = text.find('{')
     end = text.rfind('}')
     if start != -1 and end != -1 and end > start:
@@ -221,7 +243,6 @@ def extract_json(text):
             return json.loads(text[start:end+1])
         except:
             pass
-    # 方法3：正则匹配最外层 JSON 对象
     pattern = r'\{(?:[^{}]|(?:\{[^{}]*\}))*\}'
     matches = re.findall(pattern, text)
     for match in matches:
@@ -237,7 +258,7 @@ def analyze_with_ai(current_data, memory_context):
 【当前价格数据】（物品|品质, 当前新鲜均价, 7日均价, 偏离%）：
 {json.dumps(current_data, ensure_ascii=False, indent=2)}
 
-【历史记忆】（price_history 为该物品历史价格记录，data_points 为有效数据点数）：
+【历史记忆】（price_history 包含每个时间点的价格，注意观察不同时段的价格差异）：
 {json.dumps(memory_context, ensure_ascii=False, indent=2)}
 
 请严格按照以下要求输出：
@@ -249,18 +270,19 @@ def analyze_with_ai(current_data, memory_context):
       "item": "物品名|品质",
       "signal": "BUY/SELL/HOLD",
       "current_price": 数值,
-      "reason": "波动原因推测，不确定说'原因不明'，禁止编造版本号",
+      "reason": "波动原因推测，不确定说'原因不明'，禁止编造版本号；如果历史数据包含多个时段，分析是否存在昼夜价格规律（例如晚上价格是否普遍高于早晨）",
       "trend": "上涨/下跌/震荡/样本不足",
-      "trend_basis": "趋势依据，data_points<2 时说明样本不足",
-      "advice": "具体建议",
+      "trend_basis": "趋势依据，data_points<2 时说明样本不足；如果 data_points>=3 且覆盖不同时段，说明昼夜规律",
+      "advice": "具体建议，包括最佳买卖时段（如果规律明显）",
       "risk": "低/中/高",
       "position_note": "持仓备注或null"
     }}
   ],
-  "market_overview": "整体市场1-2句总结"
+  "market_overview": "整体市场1-2句总结，可包含对昼夜规律的总体判断"
 }}
 3. 即使 data_points=1，也必须基于当前偏离度给出信号和建议。
-4. 不要输出任何 JSON 以外的内容。"""
+4. 如果 data_points>=3 且时间跨度超过12小时，必须尝试分析昼夜规律。
+5. 不要输出任何 JSON 以外的内容。"""
 
     headers = {
         "Authorization": f"Bearer {OPENROUTER_KEY}",
@@ -270,7 +292,7 @@ def analyze_with_ai(current_data, memory_context):
         "model": "openrouter/free",
         "messages": [{"role": "user", "content": prompt}],
         "response_format": {"type": "json_object"},
-        "max_tokens": 4096
+        "max_tokens": 6144
     }
     try:
         r = requests.post("https://openrouter.ai/api/v1/chat/completions",
@@ -309,9 +331,8 @@ def push_to_serverchan(title, content):
 def format_report(analysis_text):
     data = extract_json(analysis_text)
     if not data:
-        # 如果提取失败，返回原始文本前1500字符作为调试信息
         return f"⚠️ AI 分析解析失败，原始响应:\n{analysis_text[:1500]}"
-    lines = [f"📊 **DarkerDB AI 市场分析报告** | {datetime.now().strftime('%Y-%m-%d %H:%M')}", "=" * 46]
+    lines = [f"📊 **DarkerDB AI 市场分析报告** | {datetime.now().strftime('%Y-%m-%d %H:%M')}", "=" * 58]
     sc = {"BUY": 0, "SELL": 0, "HOLD": 0}
     for a in data.get("analyses", []):
         sig = a.get("signal", "HOLD")
@@ -328,14 +349,16 @@ def format_report(analysis_text):
         if a.get("position_note"):
             lines.append(f"   📌 持仓: {a['position_note']}")
     if data.get("market_overview"):
-        lines += ["\n" + "=" * 46, f"📋 **市场总览**: {data['market_overview']}"]
-    lines += ["\n" + "=" * 46, f"📊 信号: 🟢BUY {sc['BUY']} | 🔴SELL {sc['SELL']} | ⚪HOLD {sc['HOLD']}"]
+        lines += ["\n" + "=" * 58, f"📋 **市场总览**: {data['market_overview']}"]
+    lines += ["\n" + "=" * 58, f"📊 信号: 🟢BUY {sc['BUY']} | 🔴SELL {sc['SELL']} | ⚪HOLD {sc['HOLD']}"]
     return "\n".join(lines)
 
 # === 主流程 ===
 def main():
-    print("🚀 DarkerDB AI Trader 启动（AI 修复版）...")
-    today = datetime.now().strftime("%Y-%m-%d")
+    print("🚀 DarkerDB AI Trader 启动（昼夜分析版，每4小时运行）...")
+    now_utc = datetime.now(timezone.utc)
+    timestamp_str = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+    print(f"⏰ 当前时间戳: {timestamp_str}")
     mem = load_memory()
     print("🔍 查询市场价格...")
     current_data, skipped, fallback_used = [], [], []
@@ -372,25 +395,32 @@ def main():
         src = {"listings": "挂牌", "mixed": "挂牌+成交", "sales": "成交", "market_fallback": "兜底(/v2/market)"}.get(result["source"], "?")
         print(f"  ✅ {name}|{rarity}: 均价={price} (样本:{result['sample_count']} 最低:{result['min_price']} 来源:{src})")
 
-        series = get_price_series(mem, f"{name}|{rarity}")
-        if len(series) >= 2:
-            past = [p for _, p in series[:-1]]
-            hist = sum(past) / len(past) if past else price
-            dev = ((price - hist) / hist) * 100 if hist else 0
+        # 计算偏离度（使用过去7天的平均价格，排除今天的点）
+        series = get_price_series(mem, f"{name}|{rarity}", hours=168)  # 7天
+        # 排除当前时间戳附近的点（防止刚写入就被自己影响）
+        today_start = now_utc.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        past_series = [(k, v) for k, v in series if k < today_start]
+        if len(past_series) >= 2:
+            past_prices = [v for _, v in past_series]
+            hist_avg = sum(past_prices) / len(past_prices)
+            dev = ((price - hist_avg) / hist_avg) * 100
         else:
+            # 首日：用最低价作为基准
             dmin = result["min_price"]
-            hist = dmin if dmin else price
+            hist_avg = dmin if dmin else price
             dev = ((price - dmin) / dmin) * 100 if dmin else 0
+
         signal = "BUY" if dev < BUY_T else ("SELL" if dev > SELL_T else "HOLD")
         current_data.append({
             "item": f"{name}|{rarity}",
             "current_price": price,
-            "avg_7d": round(hist, 1),
+            "avg_7d": round(hist_avg, 1),
             "deviation_pct": round(dev, 1),
             "signal": signal,
             "sample_size": result["sample_count"]
         })
-        add_memory(mem, f"{name}|{rarity}", today, price)
+        # 写入记忆（使用时间戳）
+        add_memory(mem, f"{name}|{rarity}", timestamp_str, price)
         time.sleep(1)
 
     if not current_data:
@@ -398,12 +428,13 @@ def main():
         if skipped: print(f"⚠️ 跳过 {len(skipped)} 个: {skipped}")
         return
 
+    # 构建记忆上下文（传给AI）
     mc = {}
     for e in current_data:
-        s = get_price_series(mem, e["item"], 30)
+        s = get_price_series(mem, e["item"], hours=168)  # 7天
         if s:
             mc[e["item"]] = {
-                "price_history": [{"date": d, "price": p} for d, p in s[-10:]],
+                "price_history": [{"time": k, "price": v} for k, v in s[-20:]],  # 最多20个点
                 "data_points": len(s)
             }
 
@@ -411,7 +442,7 @@ def main():
     at = analyze_with_ai(current_data, mc)
     if not at:
         print("⚠️ AI 失败，使用基础报告")
-        lines = [f"📊 价格报告 | {today}"]
+        lines = [f"📊 价格报告 | {datetime.now().strftime('%Y-%m-%d %H:%M')}"]
         for e in current_data:
             em = {"BUY": "🟢", "SELL": "🔴", "HOLD": "⚪"}.get(e["signal"], "⚪")
             lines.append(f"{em} {e['item']}: 均价={e['current_price']} (偏离{e['deviation_pct']}%) [样本:{e['sample_size']}]")
@@ -428,27 +459,24 @@ def main():
     save_memory(mem)
     print("📤 推送...")
     push_to_serverchan(f"📊 DarkerDB 市场分析 | {datetime.now().strftime('%m-%d %H:%M')}", report)
-    print("\n" + "=" * 46)
+    print("\n" + "=" * 62)
     print(report[:2000])
     print(f"\n✅ 完成！有数据:{len(current_data)} 跳过:{len(skipped)} 兜底:{len(fallback_used)}")
 
-    # 处理 Git push 冲突（尝试 rebase 后 push）
+    # Git 操作（自动处理冲突）
     try:
         subprocess.run(["git", "config", "--global", "user.email", "action@github.com"], capture_output=True)
         subprocess.run(["git", "config", "--global", "user.name", "GitHub Action"], capture_output=True)
         subprocess.run(["git", "add", HISTORY_FILE], capture_output=True)
-        subprocess.run(["git", "commit", "-m", "Update price memory"], capture_output=True)
-        # 先 pull rebase，再 push
+        subprocess.run(["git", "commit", "-m", f"Update price memory at {timestamp_str}"], capture_output=True)
         pull = subprocess.run(["git", "pull", "--rebase", "origin", "main"], capture_output=True, text=True)
         if pull.returncode != 0:
-            print(f"⚠️ Git pull 失败: {pull.stderr.strip()}")
-            # 如果 rebase 失败，尝试 force push（谨慎）
+            print(f"⚠️ Git pull 失败: {pull.stderr.strip()}, 尝试 force push")
             subprocess.run(["git", "push", "--force", "origin", "main"], capture_output=True)
         else:
             push = subprocess.run(["git", "push"], capture_output=True, text=True)
             if push.returncode != 0:
-                print(f"⚠️ Git push 失败: {push.stderr.strip()}")
-                # 最后手段 force push
+                print(f"⚠️ Git push 失败: {push.stderr.strip()}, 尝试 force push")
                 subprocess.run(["git", "push", "--force", "origin", "main"], capture_output=True)
     except Exception as e:
         print(f"⚠️ Git 操作异常: {e}")
