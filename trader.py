@@ -1,6 +1,6 @@
 """
 DarkerDB AI Trader - 云端版（Server酱推送）
-强制只查最近1小时内的挂牌，避免数据滞后
+优先使用 /v2/price-checks 获取官方估价，回退到 /v2/market
 """
 import os
 import json
@@ -127,14 +127,6 @@ def safe_get(url, params=None, retries=3):
 def norm(s):
     return (s or "").strip().lower().replace("’", "'").replace("'", "").replace("-", " ").replace("_", " ").replace("(", "").replace(")", "").replace(":", "")
 
-def derive_archetype(item_id):
-    if not item_id:
-        return None
-    parts = item_id.rsplit("_", 1)
-    if len(parts) == 2 and parts[1].isdigit():
-        return parts[0]
-    return item_id
-
 def resolve_item_id(name):
     r = safe_get("https://api.darkerdb.com/v2/search", {"q": name, "limit": 5})
     if not r:
@@ -154,31 +146,49 @@ def resolve_item_id(name):
             return item.get("id")
     return None
 
-def query_market(archetype, rarity):
-    # 计算1小时前的时间戳（ISO 8601格式）
+def get_price_checks(item_id, rarity):
+    """优先使用 /v2/price-checks 获取官方估价"""
+    url = "https://api.darkerdb.com/v2/price-checks"
+    params = {"item_id": item_id, "rarity": rarity}
+    r = safe_get(url, params)
+    if not r:
+        return None
+    data = r.json()
+    body = data.get("body", {})
+    if not body:
+        return None
+    # 尝试从返回中提取价格（具体字段需根据实际返回调整）
+    # 常见字段：price, estimated_price, value, average_price
+    price = body.get("price") or body.get("estimated_price") or body.get("value") or body.get("average_price")
+    if price:
+        return float(price)
+    # 如果 body 是列表，取第一个元素
+    if isinstance(body, list) and len(body) > 0:
+        first = body[0]
+        price = first.get("price") or first.get("estimated_price") or first.get("value") or first.get("average_price")
+        if price:
+            return float(price)
+    return None
+
+def query_market_fallback(archetype, rarity):
+    """回退方案：使用 /v2/market 带 since 参数"""
     one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
     since_param = one_hour_ago.strftime("%Y-%m-%dT%H:%M:%SZ")
-    
     params = {
         "archetype": archetype,
         "limit": PER_ITEM_LIMIT,
         "listing_state": "active",
         "sort": "price_per_unit:asc",
-        "since": since_param,  # 只查最近1小时内的挂牌
+        "since": since_param,
     }
     if rarity:
         params["rarity"] = rarity.lower()
-    
     r = safe_get("https://api.darkerdb.com/v2/market", params)
     if not r:
-        return []
+        return None
     body = r.json().get("body", [])
-    
-    # 调试：打印第一条挂牌的信息
-    if body:
-        first = body[0]
-        print(f"  [DEBUG] {first.get('name')} id={first.get('id')} ppu={first.get('price_per_unit')} created_at={first.get('created_at','N/A')}")
-    
+    if not body:
+        return None
     prices = []
     for m in body:
         ppu = m.get("price_per_unit")
@@ -191,7 +201,9 @@ def query_market(archetype, rarity):
         if total and abs(ppu * qty - total) / total > 0.1:
             continue
         prices.append(float(ppu))
-    return prices
+    if not prices:
+        return None
+    return min(prices)
 
 # === 长期记忆 ===
 def load_memory():
@@ -341,7 +353,7 @@ def main():
     print("🚀 DarkerDB AI Trader 启动...")
     today = datetime.now().strftime("%Y-%m-%d")
     mem = load_memory()
-    print("🔍 查询市场价格（仅最近1小时挂牌）...")
+    print("🔍 查询市场价格（优先使用官方 price-checks）...")
     current_data = []
     missing_ids = {}
     for name, rarity in WATCHLIST:
@@ -353,46 +365,61 @@ def main():
         if not item_id:
             print(f"  ❌ {name}: 无法解析")
             continue
-        archetype = derive_archetype(item_id)
-        prices = query_market(archetype, rarity)
-        if not prices:
-            print(f"  ⚠️ {name}|{rarity}: 最近1小时无有效挂牌")
+        
+        # 优先使用 price-checks
+        price = get_price_checks(item_id, rarity)
+        source = "price-checks"
+        if price is None:
+            # 回退到 /v2/market
+            archetype = item_id.rsplit("_", 1)[0]  # 从 item_id 推导 archetype
+            price = query_market_fallback(archetype, rarity)
+            source = "market-fallback"
+        
+        if price is None:
+            print(f"  ⚠️ {name}|{rarity}: 无有效价格数据")
             continue
-        current = min(prices)
-        avg_list = sum(prices) / len(prices)
+        
+        print(f"  [DEBUG] {name}|{rarity} price={price} (source: {source})")
+        
+        # 计算偏离度
         series = get_price_series(mem, f"{name}|{rarity}")
         if len(series) >= 2:
             past_prices = [p for _, p in series[:-1]]
             if past_prices:
                 hist_avg = sum(past_prices) / len(past_prices)
-                dev = ((current - hist_avg) / hist_avg) * 100
+                dev = ((price - hist_avg) / hist_avg) * 100
             else:
-                hist_avg = current
+                hist_avg = price
                 dev = 0
         else:
-            hist_avg = current
+            hist_avg = price
             dev = 0
+        
         if dev < BUY_T:
             signal = "BUY"
         elif dev > SELL_T:
             signal = "SELL"
         else:
             signal = "HOLD"
+        
         current_data.append({
             "item": f"{name}|{rarity}",
-            "current_price": current,
+            "current_price": price,
             "avg_7d": round(hist_avg, 1),
             "deviation_pct": round(dev, 1),
             "signal": signal,
-            "sample_size": len(prices)
+            "sample_size": 1  # price-checks 不提供样本数
         })
-        add_memory(mem, f"{name}|{rarity}", today, current)
+        
+        add_memory(mem, f"{name}|{rarity}", today, price)
         mem[f"__id__{name}"] = item_id
-        print(f"  ✅ {name}|{rarity}: {current} ({signal})")
+        print(f"  ✅ {name}|{rarity}: {price} ({signal})")
         time.sleep(0.5)
+    
     if not current_data:
         print("❌ 没有获取到任何价格数据")
         return
+    
     memory_context = {}
     for entry in current_data:
         key = entry["item"]
@@ -402,6 +429,7 @@ def main():
                 "price_history": [{"date": d, "price": p} for d, p in series[-10:]],
                 "data_points": len(series)
             }
+    
     print("\n🤖 AI 分析中...")
     analysis_json = analyze_with_ai(current_data, memory_context)
     if not analysis_json:
@@ -413,6 +441,7 @@ def main():
         report = "\n".join(lines)
     else:
         report = format_report(analysis_json)
+    
     save_memory(mem)
     print("📤 推送报告到微信...")
     title = f"📊 DarkerDB 市场分析 | {datetime.now().strftime('%m-%d %H:%M')}"
