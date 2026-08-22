@@ -1,6 +1,8 @@
 """
 DarkerDB AI Trader - 云端版（Server酱推送）
-每4小时运行一次，按时间戳记录价格，支持昼夜规律分析
+- 双账号自动轮转
+- 按时间戳记录价格，支持昼夜规律分析
+- 每2小时运行一次优化参数
 """
 import os
 import json
@@ -10,11 +12,12 @@ import subprocess
 from datetime import datetime, timedelta, timezone
 import re
 
-DARKERDB_KEY = os.environ["DARKERDB_KEY"]
+# ===== 从环境变量读取配置 =====
+DARKERDB_KEYS = [k.strip() for k in os.environ.get("DARKERDB_KEYS", "").split(",") if k.strip()]
 OPENROUTER_KEY = os.environ["OPENROUTER_KEY"]
 SERVERCHAN_SENDKEY = os.environ["SERVERCHAN_SENDKEY"]
 
-# === 追踪的物品清单（10 个热门物品）===
+# ===== 追踪的物品清单（10 个热门物品）=====
 WATCHLIST = [
     ("Troll's Blood", "epic"),
     ("Gold Ore", "epic"),
@@ -28,37 +31,95 @@ WATCHLIST = [
     ("Ruby (Perfect)", "epic"),
 ]
 
-# === 信号阈值 ===
-BUY_T = -15
-SELL_T = 20
-LISTING_WINDOW_HOURS = 12
-SALE_WINDOW_HOURS = 48
+# ===== 信号阈值 =====
+BUY_T = -15          # 低于7日均价15%视为买入信号
+SELL_T = 20          # 高于7日均价20%视为卖出信号
+LISTING_WINDOW_HOURS = 6      # 只看最近6小时的挂牌（每2小时运行，缩短窗口）
+SALE_WINDOW_HOURS = 24        # 成交记录看最近24小时
 MIN_SAMPLES = 1
 HISTORY_FILE = "price_memory.json"
-DATA_RETENTION_DAYS = 14   # 保留14天的数据
+ACCOUNT_STATE_FILE = "account_state.json"
+DATA_RETENTION_DAYS = 7       # 每2小时记录，保留7天已足够（84个数据点）
 DEBUG = True
 
-# === 工具函数 ===
+# ===== 工具函数 =====
+
+def load_account_state():
+    """加载账号轮转状态，返回当前 key 索引"""
+    if os.path.exists(ACCOUNT_STATE_FILE):
+        try:
+            with open(ACCOUNT_STATE_FILE) as f:
+                state = json.load(f)
+                idx = state.get("current_key_index", 0)
+                if 0 <= idx < len(DARKERDB_KEYS):
+                    return idx
+        except:
+            pass
+    return 0
+
+def save_account_state(idx):
+    """保存当前使用的 key 索引"""
+    with open(ACCOUNT_STATE_FILE, "w") as f:
+        json.dump({"current_key_index": idx}, f)
+
 def safe_get(url, params=None, retries=3):
-    headers = {
-        "X-API-Key": DARKERDB_KEY,
+    """增强版请求函数：自动轮转多个 API key"""
+    if not DARKERDB_KEYS:
+        print("❌ 未配置 DARKERDB_KEYS")
+        return None
+
+    current_idx = load_account_state()
+    headers_base = {
         "X-API-Version": "2026-08-03",
         "Cache-Control": "no-cache",
         "Pragma": "no-cache"
     }
-    for i in range(retries):
-        try:
-            r = requests.get(url, headers=headers, params=params or {}, timeout=30)
-            if r.status_code == 200:
-                return r
-            elif r.status_code == 429:
-                retry_after = int(r.headers.get("Retry-After", 5))
-                print(f"    ⚠️ 限流，等待 {retry_after}s")
-                time.sleep(retry_after)
+
+    for attempt in range(retries):
+        for key_offset in range(len(DARKERDB_KEYS)):
+            key_idx = (current_idx + key_offset) % len(DARKERDB_KEYS)
+            api_key = DARKERDB_KEYS[key_idx]
+            headers = {**headers_base, "X-API-Key": api_key}
+
+            try:
+                r = requests.get(url, headers=headers, params=params or {}, timeout=30)
+
+                # 记录当前成功使用的 key 索引
+                save_account_state(key_idx)
+
+                if r.status_code == 200:
+                    remaining = r.headers.get("X-RateLimit-Remaining")
+                    if remaining is not None:
+                        remaining = int(remaining)
+                        limit = int(r.headers.get("X-RateLimit-Limit", 60))
+                        if remaining < limit * 0.1:  # 剩余不到10%
+                            print(f"    ⚠️ Key[{key_idx}] 额度快耗尽 (剩余{remaining}/{limit})，下次切换到下一个账号")
+                            save_account_state((key_idx + 1) % len(DARKERDB_KEYS))
+                    return r
+
+                elif r.status_code == 429:
+                    retry_after = int(r.headers.get("Retry-After", 5))
+                    print(f"    ⚠️ Key[{key_idx}] 限流，{retry_after}s 后重试")
+                    continue  # 立即尝试下一个 key
+
+                elif r.status_code == 403:
+                    print(f"    ⚠️ Key[{key_idx}] 权限不足或被禁用，切换到下一个")
+                    continue
+
+                else:
+                    print(f"    ⚠️ 请求失败: {r.status_code}")
+                    return None
+
+            except Exception as e:
+                if DEBUG:
+                    print(f"    ⚠️ Key[{key_idx}] 请求异常: {e}")
                 continue
-            return None
-        except:
-            if i < 2: time.sleep(2)
+
+        # 所有 key 都试过，等待后重试
+        wait = 5 * (attempt + 1)
+        print(f"    ⚠️ 所有 key 均不可用，等待 {wait}s 后重试...")
+        time.sleep(wait)
+
     return None
 
 def norm(s):
@@ -87,6 +148,7 @@ def resolve_archetype_id(name):
     return None
 
 def get_price_from_market_fallback(archetype_id, rarity):
+    """兜底：用 /v2/market?archetype=id.item.XXX"""
     params = {"archetype": archetype_id, "rarity": rarity, "limit": 20}
     r = safe_get("https://api.darkerdb.com/v2/market", params)
     if not r or r.status_code != 200:
@@ -184,19 +246,19 @@ def get_fresh_price_checks(item_id, rarity, listing_window_hours=LISTING_WINDOW_
         "freshness": "fresh" if source == "listings" else "low", "source": source,
     }
 
-# === 长期记忆（支持时间戳） ===
+# ===== 长期记忆（支持时间戳）=====
+
 def load_memory():
     if os.path.exists(HISTORY_FILE):
         try:
             data = json.load(open(HISTORY_FILE, encoding="utf-8"))
-            # 兼容旧格式：如果某个物品的 prices 是 {date: price}，转换为 {timestamp: price}
+            # 兼容旧格式：将日期格式转为时间戳
             for key in list(data.keys()):
                 if key.startswith("__"):
                     continue
                 prices = data[key].get("prices", {})
                 new_prices = {}
                 for k, v in prices.items():
-                    # 如果是 YYYY-MM-DD 格式，转为当天中午的时间戳
                     if re.match(r'^\d{4}-\d{2}-\d{2}$', k):
                         ts = f"{k}T12:00:00Z"
                         new_prices[ts] = v
@@ -211,7 +273,7 @@ def load_memory():
 def save_memory(mem):
     json.dump(mem, open(HISTORY_FILE, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
 
-def get_price_series(mem, key, hours=336):  # 默认取最近 14 天（336小时）
+def get_price_series(mem, key, hours=168):  # 默认7天
     if key not in mem:
         return []
     prices = mem[key].get("prices", {})
@@ -223,14 +285,14 @@ def add_memory(mem, key, timestamp, price):
     if key not in mem:
         mem[key] = {"prices": {}}
     mem[key]["prices"][timestamp] = price
-    # 清理超过 DATA_RETENTION_DAYS 的旧数据
     cutoff = (datetime.now(timezone.utc) - timedelta(days=DATA_RETENTION_DAYS)).isoformat()
     prices = mem[key]["prices"]
     old = [k for k in prices if k < cutoff]
     for k in old:
         del prices[k]
 
-# === AI 分析 ===
+# ===== AI 分析 =====
+
 def extract_json(text):
     try:
         return json.loads(text)
@@ -305,7 +367,8 @@ def analyze_with_ai(current_data, memory_context):
         print(f"⚠️ AI 异常: {e}")
         return None
 
-# === Server酱 推送 ===
+# ===== Server酱 推送 =====
+
 def push_to_serverchan(title, content):
     sendkey = SERVERCHAN_SENDKEY
     if not sendkey:
@@ -332,7 +395,7 @@ def format_report(analysis_text):
     data = extract_json(analysis_text)
     if not data:
         return f"⚠️ AI 分析解析失败，原始响应:\n{analysis_text[:1500]}"
-    lines = [f"📊 **DarkerDB AI 市场分析报告** | {datetime.now().strftime('%Y-%m-%d %H:%M')}", "=" * 58]
+    lines = [f"📊 **DarkerDB AI 市场分析报告** | {datetime.now().strftime('%Y-%m-%d %H:%M')}", "=" * 64]
     sc = {"BUY": 0, "SELL": 0, "HOLD": 0}
     for a in data.get("analyses", []):
         sig = a.get("signal", "HOLD")
@@ -349,28 +412,37 @@ def format_report(analysis_text):
         if a.get("position_note"):
             lines.append(f"   📌 持仓: {a['position_note']}")
     if data.get("market_overview"):
-        lines += ["\n" + "=" * 58, f"📋 **市场总览**: {data['market_overview']}"]
-    lines += ["\n" + "=" * 58, f"📊 信号: 🟢BUY {sc['BUY']} | 🔴SELL {sc['SELL']} | ⚪HOLD {sc['HOLD']}"]
+        lines += ["\n" + "=" * 56, f"📋 **市场总览**: {data['market_overview']}"]
+    lines += ["\n" + "=" * 52, f"📊 信号: 🟢BUY {sc['BUY']} | 🔴SELL {sc['SELL']} | ⚪HOLD {sc['HOLD']}"]
     return "\n".join(lines)
 
-# === 主流程 ===
+# ===== 主流程 =====
+
 def main():
-    print("🚀 DarkerDB AI Trader 启动（昼夜分析版，每4小时运行）...")
+    print("🚀 DarkerDB AI Trader 启动（每2小时版，双账号轮转）...")
+    print(f"📋 已配置 {len(DARKERDB_KEYS)} 个 DarkerDB 账号")
+    current_idx = load_account_state()
+    print(f"🔑 本次优先使用账号 #{current_idx + 1}")
+
     now_utc = datetime.now(timezone.utc)
     timestamp_str = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
     print(f"⏰ 当前时间戳: {timestamp_str}")
+
     mem = load_memory()
     print("🔍 查询市场价格...")
     current_data, skipped, fallback_used = [], [], []
+
     for name, rarity in WATCHLIST:
         print(f"\n--- 处理 {name}|{rarity} ---")
         ck_id = f"__exact_id__{name}|{rarity}"
         ck_arch = f"__arch_id__{name}"
         arch_id = mem.get(ck_arch)
         exact_id = mem.get(ck_id)
+
         if not arch_id:
             arch_id = resolve_archetype_id(name)
-            if arch_id: mem[ck_arch] = arch_id
+            if arch_id:
+                mem[ck_arch] = arch_id
         if not exact_id and arch_id:
             exact_id = arch_id
             mem[ck_id] = exact_id
@@ -385,7 +457,8 @@ def main():
             if DEBUG:
                 print(f"    [DEBUG] price-checks 无数据，尝试 /v2/market 兜底 (archetype={arch_id})")
             result = get_price_from_market_fallback(arch_id, rarity)
-            if result: fallback_used.append(f"{name}|{rarity}")
+            if result:
+                fallback_used.append(f"{name}|{rarity}")
         if not result or result["sample_count"] == 0:
             print(f"  ⚠️ {name}|{rarity}: 无有效样本")
             skipped.append(f"{name}|{rarity}: 无有效样本")
@@ -396,8 +469,7 @@ def main():
         print(f"  ✅ {name}|{rarity}: 均价={price} (样本:{result['sample_count']} 最低:{result['min_price']} 来源:{src})")
 
         # 计算偏离度（使用过去7天的平均价格，排除今天的点）
-        series = get_price_series(mem, f"{name}|{rarity}", hours=168)  # 7天
-        # 排除当前时间戳附近的点（防止刚写入就被自己影响）
+        series = get_price_series(mem, f"{name}|{rarity}", hours=168)
         today_start = now_utc.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
         past_series = [(k, v) for k, v in series if k < today_start]
         if len(past_series) >= 2:
@@ -405,7 +477,6 @@ def main():
             hist_avg = sum(past_prices) / len(past_prices)
             dev = ((price - hist_avg) / hist_avg) * 100
         else:
-            # 首日：用最低价作为基准
             dmin = result["min_price"]
             hist_avg = dmin if dmin else price
             dev = ((price - dmin) / dmin) * 100 if dmin else 0
@@ -419,22 +490,22 @@ def main():
             "signal": signal,
             "sample_size": result["sample_count"]
         })
-        # 写入记忆（使用时间戳）
         add_memory(mem, f"{name}|{rarity}", timestamp_str, price)
         time.sleep(1)
 
     if not current_data:
         print("❌ 无数据")
-        if skipped: print(f"⚠️ 跳过 {len(skipped)} 个: {skipped}")
+        if skipped:
+            print(f"⚠️ 跳过 {len(skipped)} 个: {skipped}")
         return
 
     # 构建记忆上下文（传给AI）
     mc = {}
     for e in current_data:
-        s = get_price_series(mem, e["item"], hours=168)  # 7天
+        s = get_price_series(mem, e["item"], hours=168)
         if s:
             mc[e["item"]] = {
-                "price_history": [{"time": k, "price": v} for k, v in s[-20:]],  # 最多20个点
+                "price_history": [{"time": k, "price": v} for k, v in s[-20:]],
                 "data_points": len(s)
             }
 
@@ -446,20 +517,24 @@ def main():
         for e in current_data:
             em = {"BUY": "🟢", "SELL": "🔴", "HOLD": "⚪"}.get(e["signal"], "⚪")
             lines.append(f"{em} {e['item']}: 均价={e['current_price']} (偏离{e['deviation_pct']}%) [样本:{e['sample_size']}]")
-        if fallback_used: lines.append(f"\n🔄 兜底: {', '.join(fallback_used)}")
-        if skipped: lines.append(f"\n⚠️ 跳过 {len(skipped)} 个")
+        if fallback_used:
+            lines.append(f"\n🔄 兜底: {', '.join(fallback_used)}")
+        if skipped:
+            lines.append(f"\n⚠️ 跳过 {len(skipped)} 个")
         report = "\n".join(lines)
     else:
         report = format_report(at)
         extra = ""
-        if fallback_used: extra += f"\n\n🔄 兜底: {', '.join(fallback_used)}"
-        if skipped: extra += f"\n\n⚠️ 跳过 {len(skipped)} 个: {', '.join(skipped)}"
+        if fallback_used:
+            extra += f"\n\n🔄 兜底: {', '.join(fallback_used)}"
+        if skipped:
+            extra += f"\n\n⚠️ 跳过 {len(skipped)} 个: {', '.join(skipped)}"
         report += extra
 
     save_memory(mem)
     print("📤 推送...")
     push_to_serverchan(f"📊 DarkerDB 市场分析 | {datetime.now().strftime('%m-%d %H:%M')}", report)
-    print("\n" + "=" * 62)
+    print("\n" + "=" * 66)
     print(report[:2000])
     print(f"\n✅ 完成！有数据:{len(current_data)} 跳过:{len(skipped)} 兜底:{len(fallback_used)}")
 
@@ -467,7 +542,7 @@ def main():
     try:
         subprocess.run(["git", "config", "--global", "user.email", "action@github.com"], capture_output=True)
         subprocess.run(["git", "config", "--global", "user.name", "GitHub Action"], capture_output=True)
-        subprocess.run(["git", "add", HISTORY_FILE], capture_output=True)
+        subprocess.run(["git", "add", HISTORY_FILE, ACCOUNT_STATE_FILE], capture_output=True)
         subprocess.run(["git", "commit", "-m", f"Update price memory at {timestamp_str}"], capture_output=True)
         pull = subprocess.run(["git", "pull", "--rebase", "origin", "main"], capture_output=True, text=True)
         if pull.returncode != 0:
