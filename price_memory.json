@@ -19,19 +19,19 @@
   "__id__Gold Coin Bag": "id.item.gold_coin_bag",
   "Troll's Blood|epic": {
     "prices": {
-      "2026-08-22": 2385.62
+      "2026-08-22": 2508.08
     }
   },
   "__id__Troll's Blood": "id.item.troll_blood",
   "Gold Ore|epic": {
     "prices": {
-      "2026-08-22": 318.37
+      "2026-08-22": 319.5
     }
   },
   "__id__Gold Ore": "id.item.gold_ores",
   "Rubysilver Ore|epic": {
     "prices": {
-      "2026-08-22": 423.19
+      "2026-08-22": 400.22
     }
   },
   "__id__Rubysilver Ore": "id.item.rubysilver_ores",
@@ -97,7 +97,7 @@
   "__id__Blue Sapphire (Royal)": "id.item.blue_sapphire",
   "Potion of Healing|uncommon": {
     "prices": {
-      "2026-08-22": 40.33
+      "2026-08-22": 29.4
     }
   },
   "__id__Potion of Healing": "id.item.healing_potion",
@@ -121,7 +121,7 @@
   "__id__Surgical Kit": "id.item.surgical_kit",
   "Bandage|rare": {
     "prices": {
-      "2026-08-22": 135.82
+      "2026-08-22": 42.92
     }
   },
   "__id__Bandage": "id.item.bandage",
@@ -337,13 +337,13 @@
   "__id__Grave Essence": "id.item.grave_essence",
   "Blue Sapphire (Perfect)|epic": {
     "prices": {
-      "2026-08-22": 307.52
+      "2026-08-22": 287.42
     }
   },
   "__id__Blue Sapphire (Perfect)": "id.item.blue_sapphire",
   "Ruby (Perfect)|epic": {
     "prices": {
-      "2026-08-22": 276.54
+      "2026-08-22": 275.18
     }
   },
   "__id__Ruby (Perfect)": "id.item.ruby",
@@ -458,5 +458,25 @@
       "2026-08-22": 305.5
     }
   },
-  "__id__Sturdy Log": "id.item.sturdy_log"
+  "__id__Sturdy Log": "id.item.sturdy_log",
+  "__arch_id__Troll's Blood": "id.item.troll_blood",
+  "__exact_id__Troll's Blood|epic": "id.item.troll_blood_5001",
+  "__arch_id__Gold Ore": "id.item.gold_ores",
+  "__exact_id__Gold Ore|epic": "id.item.gold_ores_5001",
+  "__arch_id__Rubysilver Ore": "id.item.rubysilver_ores",
+  "__exact_id__Rubysilver Ore|epic": "id.item.rubysilver_ores_5001",
+  "__arch_id__Copper Ore": "id.item.copper_ores",
+  "__exact_id__Copper Ore|uncommon": "id.item.copper_ores",
+  "__arch_id__Bone": "id.item.bone",
+  "__exact_id__Bone|common": "id.item.bone",
+  "__arch_id__Potion of Healing": "id.item.healing_potion",
+  "__exact_id__Potion of Healing|uncommon": "id.item.healing_potion_2001",
+  "__arch_id__Bandage": "id.item.bandage",
+  "__exact_id__Bandage|rare": "id.item.bandage_3001",
+  "__arch_id__Grave Essence": "id.item.grave_essence",
+  "__exact_id__Grave Essence|uncommon": "id.item.grave_essence",
+  "__arch_id__Blue Sapphire (Perfect)": "id.item.blue_sapphire",
+  "__exact_id__Blue Sapphire (Perfect)|epic": "id.item.blue_sapphire_5001",
+  "__arch_id__Ruby (Perfect)": "id.item.ruby",
+  "__exact_id__Ruby (Perfect)|epic": "id.item.ruby_5001"
 }
