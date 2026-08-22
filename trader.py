@@ -1,12 +1,12 @@
 """
 DarkerDB AI Trader - 云端版（Server酱推送）
-强制绕过缓存，增加调试打印，使用最低价作为当前价
+强制只查最近1小时内的挂牌，避免数据滞后
 """
 import os
 import json
 import time
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import re
 
 DARKERDB_KEY = os.environ["DARKERDB_KEY"]
@@ -108,8 +108,8 @@ def safe_get(url, params=None, retries=3):
     headers = {
         "X-API-Key": DARKERDB_KEY,
         "X-API-Version": "2026-08-03",
-        "Cache-Control": "no-cache",   # 强制绕过缓存
-        "Pragma": "no-cache"           # 兼容老版本
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache"
     }
     for i in range(retries):
         try:
@@ -155,23 +155,29 @@ def resolve_item_id(name):
     return None
 
 def query_market(archetype, rarity):
+    # 计算1小时前的时间戳（ISO 8601格式）
+    one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
+    since_param = one_hour_ago.strftime("%Y-%m-%dT%H:%M:%SZ")
+    
     params = {
         "archetype": archetype,
         "limit": PER_ITEM_LIMIT,
         "listing_state": "active",
         "sort": "price_per_unit:asc",
+        "since": since_param,  # 只查最近1小时内的挂牌
     }
     if rarity:
         params["rarity"] = rarity.lower()
+    
     r = safe_get("https://api.darkerdb.com/v2/market", params)
     if not r:
         return []
     body = r.json().get("body", [])
     
-    # 调试：打印第一条挂牌的信息（id、price_per_unit、当前时间）
+    # 调试：打印第一条挂牌的信息
     if body:
         first = body[0]
-        print(f"  [DEBUG] {first.get('name')} id={first.get('id')} ppu={first.get('price_per_unit')} at {datetime.now().strftime('%H:%M:%S')}")
+        print(f"  [DEBUG] {first.get('name')} id={first.get('id')} ppu={first.get('price_per_unit')} created_at={first.get('created_at','N/A')}")
     
     prices = []
     for m in body:
@@ -335,7 +341,7 @@ def main():
     print("🚀 DarkerDB AI Trader 启动...")
     today = datetime.now().strftime("%Y-%m-%d")
     mem = load_memory()
-    print("🔍 查询市场价格...")
+    print("🔍 查询市场价格（仅最近1小时挂牌）...")
     current_data = []
     missing_ids = {}
     for name, rarity in WATCHLIST:
@@ -350,9 +356,9 @@ def main():
         archetype = derive_archetype(item_id)
         prices = query_market(archetype, rarity)
         if not prices:
-            print(f"  ⚠️ {name}|{rarity}: 无有效挂牌")
+            print(f"  ⚠️ {name}|{rarity}: 最近1小时无有效挂牌")
             continue
-        current = min(prices)  # 使用最低价（不加过滤）
+        current = min(prices)
         avg_list = sum(prices) / len(prices)
         series = get_price_series(mem, f"{name}|{rarity}")
         if len(series) >= 2:
