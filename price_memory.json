@@ -49,7 +49,7 @@
   "__id__Copper Ore": "id.item.copper_ores",
   "Bone|common": {
     "prices": {
-      "2026-08-22": 315.0
+      "2026-08-22": 323.2
     }
   },
   "__id__Bone": "id.item.bone",
@@ -331,7 +331,7 @@
   "__id__Sharp Sea Urchin Spine": "id.item.sharp_sea_urchin_spine",
   "Grave Essence|uncommon": {
     "prices": {
-      "2026-08-22": 295.08
+      "2026-08-22": 285.91
     }
   },
   "__id__Grave Essence": "id.item.grave_essence",
