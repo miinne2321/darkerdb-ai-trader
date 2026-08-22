@@ -2,9 +2,7 @@ name: DarkerDB AI Trader
 
 on:
   schedule:
-    # 每3小时跑一次（Server酱免费版每天5条额度）
-    # 北京时间 = UTC+8，所以 0点/3点/6点... 对应 UTC 16点/19点/22点
-    - cron: '0 */3 * * *'
+    - cron: '0 */4 * * *'   # 每4小时运行一次（UTC时间，对应北京时间 8/12/16/20/0/4
   workflow_dispatch:  # 允许手动触发
 
 jobs:
