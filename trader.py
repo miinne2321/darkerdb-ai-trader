@@ -1,8 +1,8 @@
 """
 DarkerDB AI Trader - 云端版（Server酱推送）
 使用 /v2/price-checks 获取新鲜挂牌 + 近期成交
-优先 listings，不够时补充 sales
-精简版：只保留 10 个最热门物品
+放宽时间窗口 + 降低最小样本数 + /v2/market 兜底
+精简版：10 个热门物品
 """
 import os
 import json
@@ -17,25 +17,26 @@ SERVERCHAN_SENDKEY = os.environ["SERVERCHAN_SENDKEY"]
 
 # === 追踪的物品清单（10 个最热门物品）===
 WATCHLIST = [
-    ("Troll's Blood", "epic"),        # 你点名要留
-    ("Gold Ore", "epic"),             # 基础材料，交易量大
-    ("Rubysilver Ore", "epic"),       # 基础材料，样本充足
-    ("Copper Ore", "uncommon"),       # 样本最多(50)，最稳定
-    ("Bone", "common"),               # 基础材料，稳定
-    ("Potion of Healing", "uncommon"),# 消耗品之王，最热门
-    ("Bandage", "rare"),              # 消耗品，样本最多(50)
-    ("Grave Essence", "uncommon"),    # 稳定交易品
-    ("Blue Sapphire (Perfect)", "epic"), # 宝石类代表
-    ("Ruby (Perfect)", "epic"),       # 宝石类，样本最多(46)
+    ("Troll's Blood", "epic"),
+    ("Gold Ore", "epic"),
+    ("Rubysilver Ore", "epic"),
+    ("Copper Ore", "uncommon"),
+    ("Bone", "common"),
+    ("Potion of Healing", "uncommon"),
+    ("Bandage", "rare"),
+    ("Grave Essence", "uncommon"),
+    ("Blue Sapphire (Perfect)", "epic"),
+    ("Ruby (Perfect)", "epic"),
 ]
 
 # === 信号阈值 ===
 BUY_T = -15
 SELL_T = 20
-LISTING_WINDOW_HOURS = 6    # similar_listings 时间窗口
-SALE_WINDOW_HOURS = 24      # similar_sales 时间窗口
-MIN_SAMPLES = 3              # 最少样本数
+LISTING_WINDOW_HOURS = 12   # 放宽到 12 小时
+SALE_WINDOW_HOURS = 48      # 放宽到 48 小时
+MIN_SAMPLES = 1             # 只要有 1 个样本就用
 HISTORY_FILE = "price_memory.json"
+DEBUG = True                 # 调试模式，打印原始响应
 
 # === 工具函数 ===
 def safe_get(url, params=None, retries=3):
@@ -82,13 +83,49 @@ def resolve_item_id(name):
             return item.get("id")
     return None
 
+def get_price_from_market_fallback(item_id, rarity):
+    """兜底：使用 /v2/market 获取价格（可能 stale，但至少有数据）"""
+    params = {"item_id": item_id, "rarity": rarity, "limit": 20}
+    r = safe_get("https://api.darkerdb.com/v2/market", params)
+    if not r:
+        return None
+    data = r.json()
+    body = data.get("body")
+    if not body:
+        return None
+    
+    listings = body.get("listings", [])
+    if not listings:
+        return None
+    
+    prices = [float(l.get("price")) for l in listings if l.get("price") and l.get("price") > 0]
+    if not prices:
+        return None
+    
+    # 简单去极值：取最低价和均价的最小值
+    min_price = min(prices)
+    avg_price = sum(prices) / len(prices)
+    # 使用最低价的 1.1 倍作为保守估计（避免钓鱼低价）
+    conservative = min_price * 1.1
+    final = min(conservative, avg_price)
+    
+    return {
+        "prices": prices,
+        "sample_count": len(prices),
+        "trimmed_avg": round(final, 2),
+        "min_price": min_price,
+        "latest_listed_at": None,
+        "freshness": "fallback",
+        "source": "market_fallback",
+    }
+
 def get_fresh_price_checks(item_id, rarity, 
                            listing_window_hours=LISTING_WINDOW_HOURS, 
                            sale_window_hours=SALE_WINDOW_HOURS,
                            min_samples=MIN_SAMPLES):
     """
     使用 /v2/price-checks，优先取 similar_listings，
-    不够时补充 similar_sales。
+    不够时补充 similar_sales，再不够用 /v2/market 兜底。
     """
     params = {"item_id": item_id, "rarity": rarity}
     r = safe_get("https://api.darkerdb.com/v2/price-checks", params)
@@ -102,6 +139,11 @@ def get_fresh_price_checks(item_id, rarity,
     now = datetime.now(timezone.utc)
     listing_cutoff = now - timedelta(hours=listing_window_hours)
     sale_cutoff = now - timedelta(hours=sale_window_hours)
+
+    if DEBUG:
+        n_listings = len(body.get("similar_listings", []))
+        n_sales = len(body.get("similar_sales", []))
+        print(f"    [DEBUG] similar_listings={n_listings}, similar_sales={n_sales}")
 
     # 收集新鲜 listings
     fresh_prices = []
@@ -144,6 +186,11 @@ def get_fresh_price_checks(item_id, rarity,
             source = "mixed"
 
     if not fresh_prices:
+        if DEBUG:
+            print(f"    [DEBUG] price-checks 无新鲜样本，尝试 /v2/market 兜底")
+        fallback = get_price_from_market_fallback(item_id, rarity)
+        if fallback:
+            return fallback
         return {
             "prices": [],
             "sample_count": 0,
@@ -351,13 +398,15 @@ def format_report(analysis_text):
 
 # === 主流程 ===
 def main():
-    print("🚀 DarkerDB AI Trader 启动（精简版 · 10 个热门物品）...")
+    print("🚀 DarkerDB AI Trader 启动（宽松窗口 + 兜底版）...")
     print(f"⏰ 挂牌窗口：最近 {LISTING_WINDOW_HOURS} 小时 | 成交窗口：最近 {SALE_WINDOW_HOURS} 小时")
+    print(f"🔧 DEBUG 模式: {'开' if DEBUG else '关'} | 最小样本数: {MIN_SAMPLES}")
     today = datetime.now().strftime("%Y-%m-%d")
     mem = load_memory()
     print("🔍 查询市场价格...")
     current_data = []
     skipped = []
+    fallback_used = []
     missing_ids = {}
     for name, rarity in WATCHLIST:
         cache_key = f"__id__{name}"
@@ -379,10 +428,19 @@ def main():
             continue
 
         price = result["trimmed_avg"]
-        source_label = {"listings": "挂牌", "mixed": "挂牌+成交", "sales": "成交"}.get(result["source"], "?")
+        source_label = {
+            "listings": "挂牌", 
+            "mixed": "挂牌+成交", 
+            "sales": "成交",
+            "fallback": "兜底(/v2/market)"
+        }.get(result["source"], "?")
+        
+        if result["source"] == "fallback":
+            fallback_used.append(f"{name}|{rarity}")
+        
         print(f"  ✅ {name}|{rarity}: 均价={price} "
               f"(样本:{result['sample_count']} 最低:{result['min_price']} "
-              f"来源:{source_label} 新鲜度:{result['freshness']})")
+              f"来源:{source_label})")
 
         # 计算偏离度
         series = get_price_series(mem, f"{name}|{rarity}")
@@ -446,13 +504,19 @@ def main():
         for e in current_data:
             emoji = {"BUY": "🟢", "SELL": "🔴", "HOLD": "⚪"}.get(e["signal"], "⚪")
             lines.append(f"{emoji} {e['item']}: 均价={e['current_price']} (偏离{e['deviation_pct']}%) [样本:{e['sample_size']}]")
+        if fallback_used:
+            lines.append(f"\n🔄 使用兜底数据的物品: {', '.join(fallback_used)}")
         if skipped:
             lines.append(f"\n⚠️ 跳过 {len(skipped)} 个物品")
         report = "\n".join(lines)
     else:
         report = format_report(analysis_text)
+        extra = ""
+        if fallback_used:
+            extra += f"\n\n🔄 使用兜底数据的物品: {', '.join(fallback_used)}"
         if skipped:
-            report += f"\n\n⚠️ 另有 {len(skipped)} 个物品无有效样本，未参与分析"
+            extra += f"\n\n⚠️ 跳过 {len(skipped)} 个物品: {', '.join(skipped)}"
+        report += extra
 
     save_memory(mem)
     print("📤 推送报告到微信...")
@@ -461,7 +525,7 @@ def main():
     print("\n" + "=" * 46)
     print(report[:2000])
     print(f"\n✅ 完成！报告已发送到微信")
-    print(f"📊 统计：{len(current_data)} 个物品有数据，{len(skipped)} 个被跳过")
+    print(f"📊 统计：{len(current_data)} 个物品有数据，{len(skipped)} 个被跳过，{len(fallback_used)} 个用兜底")
 
 
 if __name__ == "__main__":
