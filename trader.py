@@ -19,7 +19,7 @@ WATCHLIST = [
     ("Troll's Blood", "epic"),
     ("Gold Ore", "epic"),
     ("Rubysilver Ore", "epic"),
-    ("Obsidian Ore", "epic"),          # ← 替换 Copper Ore
+    ("Obsidian Ore", "epic"),
     ("Bone", "common"),
     ("Potion of Healing", "uncommon"),
     ("Bandage", "rare"),
@@ -68,7 +68,7 @@ def resolve_archetype_id(name):
     if not r:
         return None
     data = r.json()
-        body = data.get("body", {})
+    body = data.get("body", {})
     results = body.get("results", []) if isinstance(body, dict) else []
     name_n = norm(name)
     for item in results:
@@ -77,7 +77,8 @@ def resolve_archetype_id(name):
         iname = norm(item.get("name", ""))
         if name_n == iname or name_n in iname or iname in name_n:
             found = item.get("id")
-            if DEBUG: print(f"    [DEBUG] archetype_id for '{name}': {found}")
+            if DEBUG:
+                print(f"    [DEBUG] archetype_id for '{name}': {found}")
             return found
     for item in results:
         if isinstance(item, dict) and item.get("type") == "item":
@@ -92,7 +93,8 @@ def get_price_from_market_fallback(archetype_id, rarity):
     params = {"archetype": archetype_id, "rarity": rarity, "limit": 20}
     r = safe_get("https://api.darkerdb.com/v2/market", params)
     if not r or r.status_code != 200:
-        if DEBUG: print(f"    [DEBUG] /v2/market fallback failed: status={r.status_code if r else 'None'}")
+        if DEBUG:
+            print(f"    [DEBUG] /v2/market fallback failed: status={r.status_code if r else 'None'}")
         return None
     
     data = r.json()
@@ -102,14 +104,16 @@ def get_price_from_market_fallback(archetype_id, rarity):
     
     listings = body.get("listings", [])
     if not listings:
-        if DEBUG: print(f"    [DEBUG] /v2/market fallback: 0 listings")
+        if DEBUG:
+            print(f"    [DEBUG] /v2/market fallback: 0 listings")
         return None
     
     prices = [float(l.get("price")) for l in listings if l.get("price") and l.get("price") > 0]
     if not prices:
         return None
     
-    if DEBUG: print(f"    [DEBUG] /v2/market fallback: {len(prices)} listings, 价格范围 {min(prices)}-{max(prices)}")
+    if DEBUG:
+        print(f"    [DEBUG] /v2/market fallback: {len(prices)} listings, 价格范围 {min(prices)}-{max(prices)}")
     
     min_price = min(prices)
     avg_price = sum(prices) / len(prices)
@@ -152,11 +156,14 @@ def get_fresh_price_checks(item_id, rarity, listing_window_hours=LISTING_WINDOW_
     fresh_prices = []
     for listing in similar_listings:
         listed_at = listing.get("listed_at")
-        if not listed_at: continue
+        if not listed_at:
+            continue
         try:
             lt = datetime.fromisoformat(listed_at.replace("Z", "+00:00"))
-            if lt < listing_cutoff: continue
-        except: continue
+            if lt < listing_cutoff:
+                continue
+        except:
+            continue
         price = listing.get("price")
         if price and price > 0:
             fresh_prices.append(float(price))
@@ -165,11 +172,14 @@ def get_fresh_price_checks(item_id, rarity, listing_window_hours=LISTING_WINDOW_
     if len(fresh_prices) < min_samples:
         for sale in similar_sales:
             sold_at = sale.get("sold_at")
-            if not sold_at: continue
+            if not sold_at:
+                continue
             try:
                 st = datetime.fromisoformat(sold_at.replace("Z", "+00:00"))
-                if st < sale_cutoff: continue
-            except: continue
+                if st < sale_cutoff:
+                    continue
+            except:
+                continue
             price = sale.get("price")
             if price and price > 0:
                 fresh_prices.append(float(price))
@@ -183,51 +193,67 @@ def get_fresh_price_checks(item_id, rarity, listing_window_hours=LISTING_WINDOW_
     n = len(sorted_p)
     min_price = sorted_p[0]
     if n >= 4:
-        q1 = sorted_p[n // 4]; q3 = sorted_p[3 * n // 4]
+        q1 = sorted_p[n // 4]
+        q3 = sorted_p[3 * n // 4]
         iqr = q3 - q1
-        lower, upper = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+        lower = q1 - 1.5 * iqr
+        upper = q3 + 1.5 * iqr
         trimmed = [p for p in fresh_prices if lower <= p <= upper]
-        if not trimmed: trimmed = fresh_prices
+        if not trimmed:
+            trimmed = fresh_prices
     else:
         trimmed = fresh_prices
     trimmed_avg = sum(trimmed) / len(trimmed)
     return {
-        "prices": fresh_prices, "sample_count": n,
-        "trimmed_avg": round(trimmed_avg, 2), "min_price": min_price,
-        "freshness": "fresh" if source == "listings" else "low", "source": source,
+        "prices": fresh_prices,
+        "sample_count": n,
+        "trimmed_avg": round(trimmed_avg, 2),
+        "min_price": min_price,
+        "freshness": "fresh" if source == "listings" else "low",
+        "source": source,
     }
 
 # === 长期记忆 ===
 def load_memory():
     if os.path.exists(HISTORY_FILE):
-        try: return json.load(open(HISTORY_FILE, encoding="utf-8"))
-        except: pass
+        try:
+            return json.load(open(HISTORY_FILE, encoding="utf-8"))
+        except:
+            pass
     return {}
 
 def save_memory(mem):
     json.dump(mem, open(HISTORY_FILE, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
 
 def get_price_series(mem, key, days=30):
-    if key not in mem: return []
+    if key not in mem:
+        return []
     prices = mem[key].get("prices", {})
     cut = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
     return sorted([(k, v) for k, v in prices.items() if k >= cut])
 
 def add_memory(mem, key, today, price):
-    if key not in mem: mem[key] = {"prices": {}}
+    if key not in mem:
+        mem[key] = {"prices": {}}
     mem[key]["prices"][today] = price
     prices = mem[key]["prices"]
     old = [k for k in prices if k < (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")]
-    for k in old: del prices[k]
+    for k in old:
+        del prices[k]
 
 # === AI 分析 ===
 def extract_json(text):
-    try: return json.loads(text)
-    except: pass
-    s, e = text.find('{'), text.rfind('}')
+    try:
+        return json.loads(text)
+    except:
+        pass
+    s = text.find('{')
+    e = text.rfind('}')
     if s != -1 and e != -1 and e > s:
-        try: return json.loads(text[s:e+1])
-        except: pass
+        try:
+            return json.loads(text[s:e+1])
+        except:
+            pass
     return None
 
 def analyze_with_ai(current_data, memory_context):
@@ -248,26 +274,44 @@ def analyze_with_ai(current_data, memory_context):
 
 只输出 JSON，不要其他文字。"""
 
-    headers = {"Authorization": f"Bearer {OPENROUTER_KEY}", "Content-Type": "application/json"}
-    data = {"model": "openrouter/free", "messages": [{"role": "user", "content": prompt}],
-            "response_format": {"type": "json_object"}, "max_tokens": 8192}
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_KEY}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "model": "openrouter/free",
+        "messages": [{"role": "user", "content": prompt}],
+        "response_format": {"type": "json_object"},
+        "max_tokens": 8192
+    }
     try:
-        r = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=data, timeout=120)
-        if r.status_code == 200: return r.json()["choices"][0]["message"]["content"]
-        print(f"⚠️ AI {r.status_code}: {r.text[:200]}"); return None
+        r = requests.post("https://openrouter.ai/api/v1/chat/completions",
+                         headers=headers, json=data, timeout=120)
+        if r.status_code == 200:
+            return r.json()["choices"][0]["message"]["content"]
+        print(f"⚠️ AI {r.status_code}: {r.text[:200]}")
+        return None
     except Exception as e:
-        print(f"⚠️ AI 异常: {e}"); return None
+        print(f"⚠️ AI 异常: {e}")
+        return None
 
 # === Server酱 推送 ===
 def push_to_serverchan(title, content):
     sendkey = SERVERCHAN_SENDKEY
-    if not sendkey: print("⚠️ 未配置 SERVERCHAN_SENDKEY"); return
+    if not sendkey:
+        print("⚠️ 未配置 SERVERCHAN_SENDKEY")
+        return
     if sendkey.startswith("sctp"):
         m = re.match(r'^sctp(\d+)t', sendkey)
-        if m: url = f"https://{m.group(1)}.push.ft07.com/send/{sendkey}.send"
-        else: print("⚠️ SendKey 格式错误"); return
-    else: url = f"https://sctapi.ftqq.com/{sendkey}.send"
-    if len(content) > 32000: content = content[:32000] + "\n...(截断)"
+        if m:
+            url = f"https://{m.group(1)}.push.ft07.com/send/{sendkey}.send"
+        else:
+            print("⚠️ SendKey 格式错误")
+            return
+    else:
+        url = f"https://sctapi.ftqq.com/{sendkey}.send"
+    if len(content) > 32000:
+        content = content[:32000] + "\n...(截断)"
     try:
         res = requests.post(url, data={"title": title, "desp": content}, timeout=10).json()
         print("✅ 已推送到微信" if res.get("code") == 0 else f"⚠️ 推送失败: {res}")
@@ -276,19 +320,26 @@ def push_to_serverchan(title, content):
 
 def format_report(analysis_text):
     data = extract_json(analysis_text)
-    if not data: return f"⚠️ AI 分析解析失败:\n{analysis_text[:1500]}"
+    if not data:
+        return f"⚠️ AI 分析解析失败:\n{analysis_text[:1500]}"
     lines = [f"📊 **DarkerDB AI 市场分析报告** | {datetime.now().strftime('%Y-%m-%d %H:%M')}", "=" * 46]
     sc = {"BUY": 0, "SELL": 0, "HOLD": 0}
     for a in data.get("analyses", []):
-        sig = a.get("signal", "HOLD"); sc[sig] = sc.get(sig, 0) + 1
-        em = {"BUY":"🟢","SELL":"🔴","HOLD":"⚪"}.get(sig, "⚪")
-        lines += [f"\n{em} **{a.get('item','?')}** — {sig}",
-                  f"   当前新鲜均价: {a.get('current_price','?')}",
-                  f"   💡 原因: {a.get('reason','N/A')}",
-                  f"   📈 趋势: {a.get('trend','?')}（{a.get('trend_basis','')}）",
-                  f"   🎯 建议: {a.get('advice','N/A')}", f"   ⚠️ 风险: {a.get('risk','?')}"]
-        if a.get("position_note"): lines.append(f"   📌 持仓: {a['position_note']}")
-    if data.get("market_overview"): lines += ["\n" + "=" * 46, f"📋 **市场总览**: {data['market_overview']}"]
+        sig = a.get("signal", "HOLD")
+        sc[sig] = sc.get(sig, 0) + 1
+        em = {"BUY": "🟢", "SELL": "🔴", "HOLD": "⚪"}.get(sig, "⚪")
+        lines += [
+            f"\n{em} **{a.get('item', '?')}** — {sig}",
+            f"   当前新鲜均价: {a.get('current_price', '?')}",
+            f"   💡 原因: {a.get('reason', 'N/A')}",
+            f"   📈 趋势: {a.get('trend', '?')}（{a.get('trend_basis', '')}）",
+            f"   🎯 建议: {a.get('advice', 'N/A')}",
+            f"   ⚠️ 风险: {a.get('risk', '?')}"
+        ]
+        if a.get("position_note"):
+            lines.append(f"   📌 持仓: {a['position_note']}")
+    if data.get("market_overview"):
+        lines += ["\n" + "=" * 46, f"📋 **市场总览**: {data['market_overview']}"]
     lines += ["\n" + "=" * 46, f"📊 信号: 🟢BUY {sc['BUY']} | 🔴SELL {sc['SELL']} | ⚪HOLD {sc['HOLD']}"]
     return "\n".join(lines)
 
@@ -301,53 +352,74 @@ def main():
     current_data, skipped, fallback_used = [], [], []
     for name, rarity in WATCHLIST:
         print(f"\n--- 处理 {name}|{rarity} ---")
-        ck_id, ck_arch = f"__exact_id__{name}|{rarity}", f"__arch_id__{name}"
-        arch_id = mem.get(ck_arch); exact_id = mem.get(ck_id)
+        ck_id = f"__exact_id__{name}|{rarity}"
+        ck_arch = f"__arch_id__{name}"
+        arch_id = mem.get(ck_arch)
+        exact_id = mem.get(ck_id)
         if not arch_id:
             arch_id = resolve_archetype_id(name)
-            if arch_id: mem[ck_arch] = arch_id
+            if arch_id:
+                mem[ck_arch] = arch_id
         if not exact_id and arch_id:
-            exact_id = arch_id; mem[ck_id] = exact_id
+            exact_id = arch_id
+            mem[ck_id] = exact_id
         if not exact_id:
-            print(f"  ❌ {name}: 无法解析 ID"); skipped.append(f"{name}|{rarity}: 无法解析 ID"); continue
+            print(f"  ❌ {name}: 无法解析 ID")
+            skipped.append(f"{name}|{rarity}: 无法解析 ID")
+            continue
         print(f"  item_id: {exact_id}")
 
         result = get_fresh_price_checks(exact_id, rarity)
         if not result:
-            if DEBUG: print(f"    [DEBUG] price-checks 无数据，尝试 /v2/market 兜底 (archetype={arch_id})")
+            if DEBUG:
+                print(f"    [DEBUG] price-checks 无数据，尝试 /v2/market 兜底 (archetype={arch_id})")
             result = get_price_from_market_fallback(arch_id, rarity)
-            if result: fallback_used.append(f"{name}|{rarity}")
+            if result:
+                fallback_used.append(f"{name}|{rarity}")
         if not result or result["sample_count"] == 0:
-            print(f"  ⚠️ {name}|{rarity}: 无有效样本"); skipped.append(f"{name}|{rarity}: 无有效样本"); continue
+            print(f"  ⚠️ {name}|{rarity}: 无有效样本")
+            skipped.append(f"{name}|{rarity}: 无有效样本")
+            continue
 
         price = result["trimmed_avg"]
-        src = {"listings":"挂牌","mixed":"挂牌+成交","sales":"成交","fallback":"兜底(/v2/market)"}.get(result["source"], "?")
+        src = {"listings": "挂牌", "mixed": "挂牌+成交", "sales": "成交", "fallback": "兜底(/v2/market)"}.get(result["source"], "?")
         print(f"  ✅ {name}|{rarity}: 均价={price} (样本:{result['sample_count']} 最低:{result['min_price']} 来源:{src})")
 
         series = get_price_series(mem, f"{name}|{rarity}")
         if len(series) >= 2:
             past = [p for _, p in series[:-1]]
-            hist = sum(past)/len(past) if past else price
-            dev = ((price-hist)/hist)*100 if hist else 0
+            hist = sum(past) / len(past) if past else price
+            dev = ((price - hist) / hist) * 100 if hist else 0
         else:
             dmin = result["min_price"]
             hist = dmin if dmin else price
-            dev = ((price-dmin)/dmin)*100 if dmin else 0
+            dev = ((price - dmin) / dmin) * 100 if dmin else 0
         signal = "BUY" if dev < BUY_T else ("SELL" if dev > SELL_T else "HOLD")
-        current_data.append({"item":f"{name}|{rarity}","current_price":price,"avg_7d":round(hist,1),
-                             "deviation_pct":round(dev,1),"signal":signal,"sample_size":result["sample_count"]})
+        current_data.append({
+            "item": f"{name}|{rarity}",
+            "current_price": price,
+            "avg_7d": round(hist, 1),
+            "deviation_pct": round(dev, 1),
+            "signal": signal,
+            "sample_size": result["sample_count"]
+        })
         add_memory(mem, f"{name}|{rarity}", today, price)
         time.sleep(1)
 
     if not current_data:
-        print("❌ 无数据"); 
-        if skipped: print(f"⚠️ 跳过 {len(skipped)} 个: {skipped}")
+        print("❌ 无数据")
+        if skipped:
+            print(f"⚠️ 跳过 {len(skipped)} 个: {skipped}")
         return
 
     mc = {}
     for e in current_data:
         s = get_price_series(mem, e["item"], 30)
-        if s: mc[e["item"]] = {"price_history":[{"date":d,"price":p} for d,p in s[-10:]], "data_points":len(s)}
+        if s:
+            mc[e["item"]] = {
+                "price_history": [{"date": d, "price": p} for d, p in s[-10:]],
+                "data_points": len(s)
+            }
 
     print("\n🤖 AI 分析中...")
     at = analyze_with_ai(current_data, mc)
@@ -355,22 +427,30 @@ def main():
         print("⚠️ AI 失败，基础报告")
         lines = [f"📊 价格报告 | {today}"]
         for e in current_data:
-            em = {"BUY":"🟢","SELL":"🔴","HOLD":"⚪"}.get(e["signal"],"⚪")
+            em = {"BUY": "🟢", "SELL": "🔴", "HOLD": "⚪"}.get(e["signal"], "⚪")
             lines.append(f"{em} {e['item']}: 均价={e['current_price']} (偏离{e['deviation_pct']}%) [样本:{e['sample_size']}]")
-        if fallback_used: lines.append(f"\n🔄 兜底: {', '.join(fallback_used)}")
-        if skipped: lines.append(f"\n⚠️ 跳过 {len(skipped)} 个")
+        if fallback_used:
+            lines.append(f"\n🔄 兜底: {', '.join(fallback_used)}")
+        if skipped:
+            lines.append(f"\n⚠️ 跳过 {len(skipped)} 个")
         report = "\n".join(lines)
     else:
         report = format_report(at)
         extra = ""
-        if fallback_used: extra += f"\n\n🔄 兜底: {', '.join(fallback_used)}"
-        if skipped: extra += f"\n\n⚠️ 跳过 {len(skipped)} 个: {', '.join(skipped)}"
+        if fallback_used:
+            extra += f"\n\n🔄 兜底: {', '.join(fallback_used)}"
+        if skipped:
+            extra += f"\n\n⚠️ 跳过 {len(skipped)} 个: {', '.join(skipped)}"
         report += extra
 
     save_memory(mem)
     print("📤 推送...")
-    push_to_serverchan(f"📊 DarkerDB 市场分析 | {datetime.now().strftime('%m-%d %H:%M')}", report)
-    print("\n" + "=" * 46); print(report[:2000])
+    push_to_serverchan(
+        f"📊 DarkerDB 市场分析 | {datetime.now().strftime('%m-%d %H:%M')}",
+        report
+    )
+    print("\n" + "=" * 46)
+    print(report[:2000])
     print(f"\n✅ 完成！有数据:{len(current_data)} 跳过:{len(skipped)} 兜底:{len(fallback_used)}")
 
 if __name__ == "__main__":
