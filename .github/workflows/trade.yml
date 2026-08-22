@@ -25,6 +25,7 @@ jobs:
           DARKERDB_KEY: ${{ secrets.DARKERDB_KEY }}
           OPENROUTER_KEY: ${{ secrets.OPENROUTER_KEY }}
           SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
+          DARKERDB_KEYS: ${{ secrets.DARKERDB_KEYS }}
         run: python trader.py
         
       - name: Commit memory
