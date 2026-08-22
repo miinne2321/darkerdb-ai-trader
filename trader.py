@@ -3,6 +3,7 @@ DarkerDB AI Trader - 云端版（Server酱推送）
 - 双账号自动轮转
 - 按时间戳记录价格，支持昼夜规律分析
 - 每2小时运行一次优化参数
+- AI 安全过滤规避 + 模型回退
 """
 import os
 import json
@@ -13,9 +14,16 @@ from datetime import datetime, timedelta, timezone
 import re
 
 # ===== 从环境变量读取配置 =====
-DARKERDB_KEYS = [k.strip() for k in os.environ.get("DARKERDB_KEYS", "").split(",") if k.strip()]
-OPENROUTER_KEY = os.environ["OPENROUTER_KEY"]
-SERVERCHAN_SENDKEY = os.environ["SERVERCHAN_SENDKEY"]
+_raw_keys = os.environ.get("DARKERDB_KEYS", "").strip()
+if not _raw_keys:
+    # 兼容旧的 DARKERDB_KEY 单 key 配置
+    _single = os.environ.get("DARKERDB_KEY", "").strip()
+    if _single:
+        _raw_keys = _single
+DARKERDB_KEYS = [k.strip() for k in _raw_keys.split(",") if k.strip()]
+
+OPENROUTER_KEY = os.environ.get("OPENROUTER_KEY", "")
+SERVERCHAN_SENDKEY = os.environ.get("SERVERCHAN_SENDKEY", "")
 
 # ===== 追踪的物品清单（10 个热门物品）=====
 WATCHLIST = [
@@ -291,9 +299,13 @@ def add_memory(mem, key, timestamp, price):
     for k in old:
         del prices[k]
 
-# ===== AI 分析 =====
+# ===== AI 分析（安全过滤规避 + 模型回退）=====
 
 def extract_json(text):
+    # 检测是否被安全过滤
+    if "User Safety" in text or (text.strip().lower().startswith("safe") and len(text) < 80):
+        print("    ⚠️ AI 请求被安全过滤，尝试备用模型...")
+        return None
     try:
         return json.loads(text)
     except:
@@ -315,57 +327,66 @@ def extract_json(text):
     return None
 
 def analyze_with_ai(current_data, memory_context):
-    prompt = f"""你是 Dark and Darker 游戏市场分析师 AI。基于提供的材料/消耗品价格数据，完成分析。
+    prompt = f"""You are a data analysis assistant. Based on the provided price data, output a JSON analysis.
 
-【当前价格数据】（物品|品质, 当前新鲜均价, 7日均价, 偏离%）：
+Current prices (item|quality, current average, 7-day average, deviation%):
 {json.dumps(current_data, ensure_ascii=False, indent=2)}
 
-【历史记忆】（price_history 包含每个时间点的价格，注意观察不同时段的价格差异）：
+Historical data (includes timestamps and prices):
 {json.dumps(memory_context, ensure_ascii=False, indent=2)}
 
-请严格按照以下要求输出：
-1. 只输出一个 JSON 对象，不要任何其他文字、解释或思考过程。
-2. JSON 格式如下：
+Output ONLY valid JSON with this exact structure:
 {{
   "analyses": [
     {{
-      "item": "物品名|品质",
+      "item": "Item Name|Rarity",
       "signal": "BUY/SELL/HOLD",
-      "current_price": 数值,
-      "reason": "波动原因推测，不确定说'原因不明'，禁止编造版本号；如果历史数据包含多个时段，分析是否存在昼夜价格规律（例如晚上价格是否普遍高于早晨）",
-      "trend": "上涨/下跌/震荡/样本不足",
-      "trend_basis": "趋势依据，data_points<2 时说明样本不足；如果 data_points>=3 且覆盖不同时段，说明昼夜规律",
-      "advice": "具体建议，包括最佳买卖时段（如果规律明显）",
-      "risk": "低/中/高",
-      "position_note": "持仓备注或null"
+      "current_price": number,
+      "reason": "brief explanation, if unsure say 'uncertain'",
+      "trend": "rising/falling/stable/insufficient_data",
+      "trend_basis": "basis for trend assessment",
+      "advice": "specific trading suggestion",
+      "risk": "low/medium/high",
+      "position_note": "position note or null"
     }}
   ],
-  "market_overview": "整体市场1-2句总结，可包含对昼夜规律的总体判断"
+  "market_overview": "1-2 sentence summary"
 }}
-3. 即使 data_points=1，也必须基于当前偏离度给出信号和建议。
-4. 如果 data_points>=3 且时间跨度超过12小时，必须尝试分析昼夜规律。
-5. 不要输出任何 JSON 以外的内容。"""
+
+Do not include any other text, explanations, or markdown formatting. Ensure the output is parseable JSON."""
 
     headers = {
         "Authorization": f"Bearer {OPENROUTER_KEY}",
         "Content-Type": "application/json"
     }
-    data = {
-        "model": "openrouter/free",
-        "messages": [{"role": "user", "content": prompt}],
-        "response_format": {"type": "json_object"},
-        "max_tokens": 6144
-    }
-    try:
-        r = requests.post("https://openrouter.ai/api/v1/chat/completions",
-                         headers=headers, json=data, timeout=120)
-        if r.status_code == 200:
-            return r.json()["choices"][0]["message"]["content"]
-        print(f"⚠️ AI {r.status_code}: {r.text[:200]}")
-        return None
-    except Exception as e:
-        print(f"⚠️ AI 异常: {e}")
-        return None
+    models = ["openrouter/free", "mistralai/mistral-7b-instruct", "cognitivecomputations/dolphin-mixtral-8x7b"]
+
+    for model in models:
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "response_format": {"type": "json_object"},
+            "max_tokens": 2048
+        }
+        try:
+            r = requests.post("https://openrouter.ai/api/v1/chat/completions",
+                              headers=headers, json=payload, timeout=120)
+            if r.status_code == 200:
+                content = r.json()["choices"][0]["message"]["content"]
+                # 快速检查是否被安全过滤
+                if "User Safety" not in content and not (content.strip().lower().startswith("safe") and len(content) < 80):
+                    return content
+                else:
+                    print(f"    ⚠️ Model {model} response blocked by safety filter")
+                    continue
+            else:
+                print(f"    ⚠️ Model {model} returned {r.status_code}: {r.text[:100]}")
+        except Exception as e:
+            print(f"    ⚠️ Model {model} error: {e}")
+        time.sleep(1)  # 避免过快切换模型
+
+    print("❌ 所有模型均被拦截或失败")
+    return None
 
 # ===== Server酱 推送 =====
 
@@ -395,7 +416,7 @@ def format_report(analysis_text):
     data = extract_json(analysis_text)
     if not data:
         return f"⚠️ AI 分析解析失败，原始响应:\n{analysis_text[:1500]}"
-    lines = [f"📊 **DarkerDB AI 市场分析报告** | {datetime.now().strftime('%Y-%m-%d %H:%M')}", "=" * 64]
+    lines = [f"📊 **DarkerDB AI 市场分析报告** | {datetime.now().strftime('%Y-%m-%d %H:%M')}", "=" * 68]
     sc = {"BUY": 0, "SELL": 0, "HOLD": 0}
     for a in data.get("analyses", []):
         sig = a.get("signal", "HOLD")
@@ -412,8 +433,8 @@ def format_report(analysis_text):
         if a.get("position_note"):
             lines.append(f"   📌 持仓: {a['position_note']}")
     if data.get("market_overview"):
-        lines += ["\n" + "=" * 56, f"📋 **市场总览**: {data['market_overview']}"]
-    lines += ["\n" + "=" * 52, f"📊 信号: 🟢BUY {sc['BUY']} | 🔴SELL {sc['SELL']} | ⚪HOLD {sc['HOLD']}"]
+        lines += ["\n" + "=" * 54, f"📋 **市场总览**: {data['market_overview']}"]
+    lines += ["\n" + "=" * 44, f"📊 信号: 🟢BUY {sc['BUY']} | 🔴SELL {sc['SELL']} | ⚪HOLD {sc['HOLD']}"]
     return "\n".join(lines)
 
 # ===== 主流程 =====
@@ -534,7 +555,7 @@ def main():
     save_memory(mem)
     print("📤 推送...")
     push_to_serverchan(f"📊 DarkerDB 市场分析 | {datetime.now().strftime('%m-%d %H:%M')}", report)
-    print("\n" + "=" * 66)
+    print("\n" + "=" * 72)
     print(report[:2000])
     print(f"\n✅ 完成！有数据:{len(current_data)} 跳过:{len(skipped)} 兜底:{len(fallback_used)}")
 
