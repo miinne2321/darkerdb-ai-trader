@@ -246,7 +246,7 @@ def analyze_with_ai(current_data, memory_context):
         "Content-Type": "application/json"
     }
     data = {
-        "model": "deepseek/deepseek-v4-flash",
+        "model": "openrouter/free",
         "messages": [{"role": "user", "content": prompt}],
         "response_format": {"type": "json_object"},
         "max_tokens": 4000
