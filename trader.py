@@ -1,6 +1,6 @@
 """
 DarkerDB AI Trader - 云端版（Server酱推送）
-修复：精确变体 ID + /v2/market fallback 双参数尝试
+修复确认：/v2/market 兜底用 archetype=id.item.XXX 参数
 Obsidian Ore 替换 Copper Ore
 """
 import os
@@ -68,7 +68,7 @@ def resolve_archetype_id(name):
     if not r:
         return None
     data = r.json()
-    body = data.get("body", {})
+        body = data.get("body", {})
     results = body.get("results", []) if isinstance(body, dict) else []
     name_n = norm(name)
     for item in results:
@@ -84,46 +84,38 @@ def resolve_archetype_id(name):
             return item.get("id")
     return None
 
-def get_price_from_market_fallback(item_id, rarity, archetype_id=None):
-    """兜底：用 /v2/market，同时尝试 item_id 和 archetype 两种参数"""
-    # 尝试1: item_id 参数
-    params = {"rarity": rarity, "limit": 20}
-    if item_id:
-        params["item_id"] = item_id
+def get_price_from_market_fallback(archetype_id, rarity):
+    """
+    兜底：用 /v2/market?archetype=id.item.XXX
+    测试验证：archetype 参数必须带 id.item. 前缀才有效
+    """
+    params = {"archetype": archetype_id, "rarity": rarity, "limit": 20}
     r = safe_get("https://api.darkerdb.com/v2/market", params)
-    if r and r.status_code == 200:
-        data = r.json()
-        body = data.get("body")
-        listings = body.get("listings", []) if body else []
-        if DEBUG and item_id:
-            print(f"    [DEBUG] /v2/market item_id={item_id}: {len(listings)} listings")
-        if listings:
-            prices = [float(l.get("price")) for l in listings if l.get("price") and l.get("price") > 0]
-            if prices:
-                return _build_fallback_result(prices)
-
-    # 尝试2: archetype 参数（带 id.item. 前缀）
-    if archetype_id:
-        for arch_param in [archetype_id, archetype_id.replace("id.item.", "")]:
-            params2 = {"archetype": arch_param, "rarity": rarity, "limit": 20}
-            r2 = safe_get("https://api.darkerdb.com/v2/market", params2)
-            if r2 and r2.status_code == 200:
-                data2 = r2.json()
-                body2 = data2.get("body")
-                listings2 = body2.get("listings", []) if body2 else []
-                if DEBUG:
-                    print(f"    [DEBUG] /v2/market archetype={arch_param}: {len(listings2)} listings")
-                if listings2:
-                    prices = [float(l.get("price")) for l in listings2 if l.get("price") and l.get("price") > 0]
-                    if prices:
-                        return _build_fallback_result(prices)
-    return None
-
-def _build_fallback_result(prices):
+    if not r or r.status_code != 200:
+        if DEBUG: print(f"    [DEBUG] /v2/market fallback failed: status={r.status_code if r else 'None'}")
+        return None
+    
+    data = r.json()
+    body = data.get("body")
+    if not body:
+        return None
+    
+    listings = body.get("listings", [])
+    if not listings:
+        if DEBUG: print(f"    [DEBUG] /v2/market fallback: 0 listings")
+        return None
+    
+    prices = [float(l.get("price")) for l in listings if l.get("price") and l.get("price") > 0]
+    if not prices:
+        return None
+    
+    if DEBUG: print(f"    [DEBUG] /v2/market fallback: {len(prices)} listings, 价格范围 {min(prices)}-{max(prices)}")
+    
     min_price = min(prices)
     avg_price = sum(prices) / len(prices)
     conservative = min_price * 1.1
     final = min(conservative, avg_price)
+    
     return {
         "prices": prices,
         "sample_count": len(prices),
@@ -302,7 +294,7 @@ def format_report(analysis_text):
 
 # === 主流程 ===
 def main():
-    print("🚀 DarkerDB AI Trader 启动（Obsidian Ore 替换 Copper Ore）...")
+    print("🚀 DarkerDB AI Trader 启动（Obsidian Ore 替换 + 正确兜底参数）...")
     today = datetime.now().strftime("%Y-%m-%d")
     mem = load_memory()
     print("🔍 查询市场价格...")
@@ -322,8 +314,8 @@ def main():
 
         result = get_fresh_price_checks(exact_id, rarity)
         if not result:
-            if DEBUG: print(f"    [DEBUG] price-checks 无数据，尝试 /v2/market 兜底")
-            result = get_price_from_market_fallback(exact_id, rarity, arch_id)
+            if DEBUG: print(f"    [DEBUG] price-checks 无数据，尝试 /v2/market 兜底 (archetype={arch_id})")
+            result = get_price_from_market_fallback(arch_id, rarity)
             if result: fallback_used.append(f"{name}|{rarity}")
         if not result or result["sample_count"] == 0:
             print(f"  ⚠️ {name}|{rarity}: 无有效样本"); skipped.append(f"{name}|{rarity}: 无有效样本"); continue
