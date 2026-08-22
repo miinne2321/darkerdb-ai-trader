@@ -446,5 +446,11 @@
     "prices": {
       "2026-08-22": 50.0
     }
-  }
+  },
+  "Great Potion of Luck|rare": {
+    "prices": {
+      "2026-08-22": 4.0
+    }
+  },
+  "__id__Great Potion of Luck": "id.item.luck_potion_large"
 }
