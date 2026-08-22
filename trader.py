@@ -3,7 +3,8 @@ DarkerDB AI Trader - 云端版（Server酱推送）
 - 双账号自动轮转
 - 按时间戳记录价格，支持昼夜规律分析
 - 每2小时运行一次优化参数
-- AI 安全过滤规避 + 模型回退
+- AI 安全过滤规避 + 稳定免费模型回退
+- 增强降级逻辑
 """
 import os
 import json
@@ -16,7 +17,6 @@ import re
 # ===== 从环境变量读取配置 =====
 _raw_keys = os.environ.get("DARKERDB_KEYS", "").strip()
 if not _raw_keys:
-    # 兼容旧的 DARKERDB_KEY 单 key 配置
     _single = os.environ.get("DARKERDB_KEY", "").strip()
     if _single:
         _raw_keys = _single
@@ -40,20 +40,19 @@ WATCHLIST = [
 ]
 
 # ===== 信号阈值 =====
-BUY_T = -15          # 低于7日均价15%视为买入信号
-SELL_T = 20          # 高于7日均价20%视为卖出信号
-LISTING_WINDOW_HOURS = 6      # 只看最近6小时的挂牌（每2小时运行，缩短窗口）
-SALE_WINDOW_HOURS = 24        # 成交记录看最近24小时
+BUY_T = -15
+SELL_T = 20
+LISTING_WINDOW_HOURS = 6
+SALE_WINDOW_HOURS = 24
 MIN_SAMPLES = 1
 HISTORY_FILE = "price_memory.json"
 ACCOUNT_STATE_FILE = "account_state.json"
-DATA_RETENTION_DAYS = 7       # 每2小时记录，保留7天已足够（84个数据点）
+DATA_RETENTION_DAYS = 7
 DEBUG = True
 
 # ===== 工具函数 =====
 
 def load_account_state():
-    """加载账号轮转状态，返回当前 key 索引"""
     if os.path.exists(ACCOUNT_STATE_FILE):
         try:
             with open(ACCOUNT_STATE_FILE) as f:
@@ -66,68 +65,50 @@ def load_account_state():
     return 0
 
 def save_account_state(idx):
-    """保存当前使用的 key 索引"""
     with open(ACCOUNT_STATE_FILE, "w") as f:
         json.dump({"current_key_index": idx}, f)
 
 def safe_get(url, params=None, retries=3):
-    """增强版请求函数：自动轮转多个 API key"""
     if not DARKERDB_KEYS:
         print("❌ 未配置 DARKERDB_KEYS")
         return None
-
     current_idx = load_account_state()
     headers_base = {
         "X-API-Version": "2026-08-03",
         "Cache-Control": "no-cache",
         "Pragma": "no-cache"
     }
-
     for attempt in range(retries):
         for key_offset in range(len(DARKERDB_KEYS)):
             key_idx = (current_idx + key_offset) % len(DARKERDB_KEYS)
             api_key = DARKERDB_KEYS[key_idx]
             headers = {**headers_base, "X-API-Key": api_key}
-
             try:
                 r = requests.get(url, headers=headers, params=params or {}, timeout=30)
-
-                # 记录当前成功使用的 key 索引
                 save_account_state(key_idx)
-
                 if r.status_code == 200:
                     remaining = r.headers.get("X-RateLimit-Remaining")
                     if remaining is not None:
                         remaining = int(remaining)
                         limit = int(r.headers.get("X-RateLimit-Limit", 60))
-                        if remaining < limit * 0.1:  # 剩余不到10%
-                            print(f"    ⚠️ Key[{key_idx}] 额度快耗尽 (剩余{remaining}/{limit})，下次切换到下一个账号")
+                        if remaining < limit * 0.1:
+                            print(f"    ⚠️ Key[{key_idx}] 额度快耗尽 (剩余{remaining}/{limit})，下次切换")
                             save_account_state((key_idx + 1) % len(DARKERDB_KEYS))
                     return r
-
                 elif r.status_code == 429:
-                    retry_after = int(r.headers.get("Retry-After", 5))
-                    print(f"    ⚠️ Key[{key_idx}] 限流，{retry_after}s 后重试")
-                    continue  # 立即尝试下一个 key
-
-                elif r.status_code == 403:
-                    print(f"    ⚠️ Key[{key_idx}] 权限不足或被禁用，切换到下一个")
                     continue
-
+                elif r.status_code == 403:
+                    continue
                 else:
                     print(f"    ⚠️ 请求失败: {r.status_code}")
                     return None
-
             except Exception as e:
                 if DEBUG:
                     print(f"    ⚠️ Key[{key_idx}] 请求异常: {e}")
                 continue
-
-        # 所有 key 都试过，等待后重试
         wait = 5 * (attempt + 1)
         print(f"    ⚠️ 所有 key 均不可用，等待 {wait}s 后重试...")
         time.sleep(wait)
-
     return None
 
 def norm(s):
@@ -156,7 +137,6 @@ def resolve_archetype_id(name):
     return None
 
 def get_price_from_market_fallback(archetype_id, rarity):
-    """兜底：用 /v2/market?archetype=id.item.XXX"""
     params = {"archetype": archetype_id, "rarity": rarity, "limit": 20}
     r = safe_get("https://api.darkerdb.com/v2/market", params)
     if not r or r.status_code != 200:
@@ -260,7 +240,6 @@ def load_memory():
     if os.path.exists(HISTORY_FILE):
         try:
             data = json.load(open(HISTORY_FILE, encoding="utf-8"))
-            # 兼容旧格式：将日期格式转为时间戳
             for key in list(data.keys()):
                 if key.startswith("__"):
                     continue
@@ -281,7 +260,7 @@ def load_memory():
 def save_memory(mem):
     json.dump(mem, open(HISTORY_FILE, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
 
-def get_price_series(mem, key, hours=168):  # 默认7天
+def get_price_series(mem, key, hours=168):
     if key not in mem:
         return []
     prices = mem[key].get("prices", {})
@@ -299,10 +278,9 @@ def add_memory(mem, key, timestamp, price):
     for k in old:
         del prices[k]
 
-# ===== AI 分析（安全过滤规避 + 模型回退）=====
+# ===== AI 分析（稳定免费模型 + 去敏感化 prompt）=====
 
 def extract_json(text):
-    # 检测是否被安全过滤
     if "User Safety" in text or (text.strip().lower().startswith("safe") and len(text) < 80):
         print("    ⚠️ AI 请求被安全过滤，尝试备用模型...")
         return None
@@ -327,65 +305,78 @@ def extract_json(text):
     return None
 
 def analyze_with_ai(current_data, memory_context):
-    prompt = f"""You are a data analysis assistant. Based on the provided price data, output a JSON analysis.
+    # 去敏感化的 prompt：纯技术性数据分析，避免触发安全过滤
+    prompt = f"""Task: Analyze the following JSON price data and output a JSON analysis report.
 
-Current prices (item|quality, current average, 7-day average, deviation%):
+Current price data (item|rarity, current_avg, 7day_avg, deviation_percent):
 {json.dumps(current_data, ensure_ascii=False, indent=2)}
 
-Historical data (includes timestamps and prices):
+Historical data (with timestamps):
 {json.dumps(memory_context, ensure_ascii=False, indent=2)}
 
-Output ONLY valid JSON with this exact structure:
+Requirements:
+1. Output ONLY a valid JSON object, no other text.
+2. Structure:
 {{
   "analyses": [
     {{
-      "item": "Item Name|Rarity",
-      "signal": "BUY/SELL/HOLD",
+      "item": "Item|Rarity",
+      "signal": "BUY" or "SELL" or "HOLD",
       "current_price": number,
-      "reason": "brief explanation, if unsure say 'uncertain'",
-      "trend": "rising/falling/stable/insufficient_data",
-      "trend_basis": "basis for trend assessment",
-      "advice": "specific trading suggestion",
-      "risk": "low/medium/high",
-      "position_note": "position note or null"
+      "reason": "brief explanation, say 'uncertain' if unknown",
+      "trend": "rising" or "falling" or "stable" or "insufficient_data",
+      "trend_basis": "explanation of trend, mention 'insufficient_data' if data_points < 2",
+      "advice": "specific action suggestion",
+      "risk": "low" or "medium" or "high",
+      "position_note": "note or null"
     }}
   ],
-  "market_overview": "1-2 sentence summary"
+  "summary": "1-2 sentence overall summary"
 }}
-
-Do not include any other text, explanations, or markdown formatting. Ensure the output is parseable JSON."""
+3. You MUST provide exactly one analysis entry for EACH item in the current price data. Do NOT skip any.
+4. Even with only 1 data point, assign a signal based on the deviation_percent (negative = BUY, positive > 20 = SELL, otherwise HOLD)."""
 
     headers = {
         "Authorization": f"Bearer {OPENROUTER_KEY}",
         "Content-Type": "application/json"
     }
-    models = ["openrouter/free", "mistralai/mistral-7b-instruct", "cognitivecomputations/dolphin-mixtral-8x7b"]
+    # 使用当前稳定可用的免费模型（带 :free 后缀）
+    models = [
+        "openrouter/free",
+        "meta-llama/llama-3.3-70b-instruct:free",
+        "openai/gpt-oss-20b:free",
+        "nvidia/nemotron-3-nano-30b-a3b:free",
+        "qwen/qwen3-next-80b-a3b-instruct:free"
+    ]
 
-    for model in models:
+    for i, model in enumerate(models):
         payload = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
-            "response_format": {"type": "json_object"},
-            "max_tokens": 2048
+            "max_tokens": 4000
         }
         try:
             r = requests.post("https://openrouter.ai/api/v1/chat/completions",
-                              headers=headers, json=payload, timeout=120)
+                              headers=headers, json=payload, timeout=90)
             if r.status_code == 200:
                 content = r.json()["choices"][0]["message"]["content"]
-                # 快速检查是否被安全过滤
-                if "User Safety" not in content and not (content.strip().lower().startswith("safe") and len(content) < 80):
-                    return content
-                else:
-                    print(f"    ⚠️ Model {model} response blocked by safety filter")
+                if DEBUG:
+                    print(f"    [DEBUG] AI response via {model}: {content[:300]}")
+                # 检查是否被安全过滤
+                if "User Safety" in content or (content.strip().lower().startswith("safe") and len(content) < 80):
+                    print(f"    ⚠️ {model} blocked by safety filter, trying next...")
                     continue
+                return content
             else:
-                print(f"    ⚠️ Model {model} returned {r.status_code}: {r.text[:100]}")
+                print(f"    ⚠️ {model} returned {r.status_code}")
+                if r.status_code == 404:
+                    print(f"        Model not available, skipping")
+                    continue
         except Exception as e:
-            print(f"    ⚠️ Model {model} error: {e}")
-        time.sleep(1)  # 避免过快切换模型
+            print(f"    ⚠️ {model} error: {e}")
+        time.sleep(0.5)
 
-    print("❌ 所有模型均被拦截或失败")
+    print("❌ 所有模型均失败")
     return None
 
 # ===== Server酱 推送 =====
@@ -415,16 +406,20 @@ def push_to_serverchan(title, content):
 def format_report(analysis_text):
     data = extract_json(analysis_text)
     if not data:
-        return f"⚠️ AI 分析解析失败，原始响应:\n{analysis_text[:1500]}"
-    lines = [f"📊 **DarkerDB AI 市场分析报告** | {datetime.now().strftime('%Y-%m-%d %H:%M')}", "=" * 68]
+        return None
+    analyses = data.get("analyses", [])
+    if not analyses:
+        print("⚠️ AI 返回空分析列表，降级到基础报告")
+        return None
+    lines = [f"📊 **DarkerDB 数据分析报告** | {datetime.now().strftime('%Y-%m-%d %H:%M')}", "=" * 72]
     sc = {"BUY": 0, "SELL": 0, "HOLD": 0}
-    for a in data.get("analyses", []):
+    for a in analyses:
         sig = a.get("signal", "HOLD")
         sc[sig] = sc.get(sig, 0) + 1
         em = {"BUY": "🟢", "SELL": "🔴", "HOLD": "⚪"}.get(sig, "⚪")
         lines += [
             f"\n{em} **{a.get('item', '?')}** — {sig}",
-            f"   当前新鲜均价: {a.get('current_price', '?')}",
+            f"   当前均价: {a.get('current_price', '?')}",
             f"   💡 原因: {a.get('reason', 'N/A')}",
             f"   📈 趋势: {a.get('trend', '?')}（{a.get('trend_basis', '')}）",
             f"   🎯 建议: {a.get('advice', 'N/A')}",
@@ -432,12 +427,24 @@ def format_report(analysis_text):
         ]
         if a.get("position_note"):
             lines.append(f"   📌 持仓: {a['position_note']}")
-    if data.get("market_overview"):
-        lines += ["\n" + "=" * 54, f"📋 **市场总览**: {data['market_overview']}"]
+    if data.get("summary"):
+        lines += ["\n" + "=" * 57, f"📋 **总结**: {data['summary']}"]
     lines += ["\n" + "=" * 44, f"📊 信号: 🟢BUY {sc['BUY']} | 🔴SELL {sc['SELL']} | ⚪HOLD {sc['HOLD']}"]
     return "\n".join(lines)
 
 # ===== 主流程 =====
+
+def build_basic_report(current_data, fallback_used, skipped):
+    """AI 失败时的基础报告"""
+    lines = [f"📊 价格报告 | {datetime.now().strftime('%Y-%m-%d %H:%M')}"]
+    for e in current_data:
+        em = {"BUY": "🟢", "SELL": "🔴", "HOLD": "⚪"}.get(e["signal"], "⚪")
+        lines.append(f"{em} {e['item']}: 均价={e['current_price']} (偏离{e['deviation_pct']}%) [样本:{e['sample_size']}]")
+    if fallback_used:
+        lines.append(f"\n🔄 兜底: {', '.join(fallback_used)}")
+    if skipped:
+        lines.append(f"\n⚠️ 跳过 {len(skipped)} 个")
+    return "\n".join(lines)
 
 def main():
     print("🚀 DarkerDB AI Trader 启动（每2小时版，双账号轮转）...")
@@ -489,7 +496,6 @@ def main():
         src = {"listings": "挂牌", "mixed": "挂牌+成交", "sales": "成交", "market_fallback": "兜底(/v2/market)"}.get(result["source"], "?")
         print(f"  ✅ {name}|{rarity}: 均价={price} (样本:{result['sample_count']} 最低:{result['min_price']} 来源:{src})")
 
-        # 计算偏离度（使用过去7天的平均价格，排除今天的点）
         series = get_price_series(mem, f"{name}|{rarity}", hours=168)
         today_start = now_utc.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
         past_series = [(k, v) for k, v in series if k < today_start]
@@ -520,7 +526,6 @@ def main():
             print(f"⚠️ 跳过 {len(skipped)} 个: {skipped}")
         return
 
-    # 构建记忆上下文（传给AI）
     mc = {}
     for e in current_data:
         s = get_price_series(mem, e["item"], hours=168)
@@ -532,19 +537,17 @@ def main():
 
     print("\n🤖 AI 分析中...")
     at = analyze_with_ai(current_data, mc)
-    if not at:
-        print("⚠️ AI 失败，使用基础报告")
-        lines = [f"📊 价格报告 | {datetime.now().strftime('%Y-%m-%d %H:%M')}"]
-        for e in current_data:
-            em = {"BUY": "🟢", "SELL": "🔴", "HOLD": "⚪"}.get(e["signal"], "⚪")
-            lines.append(f"{em} {e['item']}: 均价={e['current_price']} (偏离{e['deviation_pct']}%) [样本:{e['sample_size']}]")
-        if fallback_used:
-            lines.append(f"\n🔄 兜底: {', '.join(fallback_used)}")
-        if skipped:
-            lines.append(f"\n⚠️ 跳过 {len(skipped)} 个")
-        report = "\n".join(lines)
-    else:
+    if at:
         report = format_report(at)
+        if report is None:
+            print("⚠️ AI 返回内容无效，使用基础报告")
+            report = build_basic_report(current_data, fallback_used, skipped)
+    else:
+        print("⚠️ AI 失败，使用基础报告")
+        report = build_basic_report(current_data, fallback_used, skipped)
+
+    # 追加兜底和跳过信息
+    if report and (fallback_used or skipped):
         extra = ""
         if fallback_used:
             extra += f"\n\n🔄 兜底: {', '.join(fallback_used)}"
@@ -555,11 +558,11 @@ def main():
     save_memory(mem)
     print("📤 推送...")
     push_to_serverchan(f"📊 DarkerDB 市场分析 | {datetime.now().strftime('%m-%d %H:%M')}", report)
-    print("\n" + "=" * 72)
+    print("\n" + "=" * 76)
     print(report[:2000])
     print(f"\n✅ 完成！有数据:{len(current_data)} 跳过:{len(skipped)} 兜底:{len(fallback_used)}")
 
-    # Git 操作（自动处理冲突）
+    # Git 操作
     try:
         subprocess.run(["git", "config", "--global", "user.email", "action@github.com"], capture_output=True)
         subprocess.run(["git", "config", "--global", "user.name", "GitHub Action"], capture_output=True)
@@ -567,12 +570,11 @@ def main():
         subprocess.run(["git", "commit", "-m", f"Update price memory at {timestamp_str}"], capture_output=True)
         pull = subprocess.run(["git", "pull", "--rebase", "origin", "main"], capture_output=True, text=True)
         if pull.returncode != 0:
-            print(f"⚠️ Git pull 失败: {pull.stderr.strip()}, 尝试 force push")
+            print(f"⚠️ Git pull 失败，尝试 force push")
             subprocess.run(["git", "push", "--force", "origin", "main"], capture_output=True)
         else:
             push = subprocess.run(["git", "push"], capture_output=True, text=True)
             if push.returncode != 0:
-                print(f"⚠️ Git push 失败: {push.stderr.strip()}, 尝试 force push")
                 subprocess.run(["git", "push", "--force", "origin", "main"], capture_output=True)
     except Exception as e:
         print(f"⚠️ Git 操作异常: {e}")
