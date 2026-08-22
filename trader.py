@@ -1,7 +1,7 @@
 """
 DarkerDB AI Trader - 云端版（Server酱推送）
-只使用 /v2/market + since 过滤，获取最近2小时内的新鲜样本
-统计方式：去极值后的均价（去掉最低10%和最高10%）
+使用 /v2/price-checks 的 similar_listings 获取新鲜挂牌样本
+严格过滤最近2小时内的挂牌，去极值均价
 """
 import os
 import json
@@ -100,7 +100,7 @@ WATCHLIST = [
 # === 信号阈值 ===
 BUY_T = -15
 SELL_T = 20
-FRESH_WINDOW_HOURS = 2   # 只取最近2小时内的样本
+FRESH_WINDOW_HOURS = 2   # 只取最近2小时内的挂牌
 HISTORY_FILE = "price_memory.json"
 
 # === 工具函数 ===
@@ -148,109 +148,98 @@ def resolve_item_id(name):
             return item.get("id")
     return None
 
-def get_fresh_samples(archetype, rarity, max_age_hours=2):
+def get_fresh_price_checks(item_id, rarity, max_age_hours=2):
     """
-    只从 /v2/market 拿最近 N 小时内新上架的活跃挂牌。
+    使用 /v2/price-checks，只取 similar_listings 中最近 N 小时内的挂牌。
     返回 dict: {
-        "prices": [float],       # 新鲜样本单价列表
-        "sample_count": int,     # 样本数
-        "min_price": float,      # 最低价
-        "trimmed_avg": float,    # 去极值后的均价（去掉最低10%和最高10%）
-        "latest_listed_at": str, # 最新样本的上架时间
+        "prices": [float],
+        "sample_count": int,
+        "trimmed_avg": float,
+        "min_price": float,
+        "latest_listed_at": str,
         "freshness": str,        # "fresh" / "empty"
     }
     """
-    # 计算 N 小时前的时间戳（ISO 8601 with Z）
-    since_dt = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
-    since_param = since_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-    
-    params = {
-        "archetype": archetype,
-        "rarity": rarity,
-        "listing_state": "active",
-        "since": since_param,       # 关键：只查最近N小时新上架的
-        "sort": "created_at:desc",  # 最新的排前面
-        "limit": 250,               # 最大化样本量（API上限250）
-    }
-    
-    r = safe_get("https://api.darkerdb.com/v2/market", params)
+    params = {"item_id": item_id, "rarity": rarity}
+    r = safe_get("https://api.darkerdb.com/v2/price-checks", params)
     if not r:
         return None
-    
     data = r.json()
-    body = data.get("body", [])
-    
+    body = data.get("body")
     if not body:
-        # 官方警告：空结果权威仅当家族扫描状态为 fresh
-        # 这里我们无法得知扫描状态，故保守处理
+        return None
+
+    # 获取 similar_listings
+    listings = body.get("similar_listings", [])
+    if not listings:
         return {
             "prices": [],
             "sample_count": 0,
-            "min_price": None,
             "trimmed_avg": None,
+            "min_price": None,
             "latest_listed_at": None,
             "freshness": "empty",
         }
-    
-    # 收集新鲜样本（双重校验 created_at）
+
+    # 计算时间阈值（UTC）
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+
+    # 过滤新鲜挂牌
     fresh_prices = []
     latest_listed_at = None
-    
-    for m in body:
-        ppu = m.get("price_per_unit")
-        if not ppu or ppu <= 0:
+    for listing in listings:
+        listed_at = listing.get("listed_at")
+        if not listed_at:
             continue
-        
-        # 本地二次校验 created_at
-        created_at = m.get("created_at")
-        if created_at:
-            try:
-                ct = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-                if ct < since_dt:
-                    continue  # 超出时间窗，跳过
-                if latest_listed_at is None or created_at > latest_listed_at:
-                    latest_listed_at = created_at
-            except:
-                pass
-        
-        # 验证总价一致性，过滤异常数据
-        qty = m.get("quantity", 1) or 1
-        total = m.get("price", 0)
-        if total and abs(ppu * qty - total) / total > 0.1:
+        try:
+            lt = datetime.fromisoformat(listed_at.replace("Z", "+00:00"))
+            if lt < cutoff:
+                continue
+            if latest_listed_at is None or listed_at > latest_listed_at:
+                latest_listed_at = listed_at
+        except:
             continue
-        
-        fresh_prices.append(float(ppu))
-    
+
+        price = listing.get("price")
+        if price and price > 0:
+            fresh_prices.append(float(price))
+
     if not fresh_prices:
         return {
             "prices": [],
             "sample_count": 0,
-            "min_price": None,
             "trimmed_avg": None,
+            "min_price": None,
             "latest_listed_at": None,
             "freshness": "empty",
         }
-    
-    # 排序，准备去极值
-    sorted_prices = sorted(fresh_prices)
-    n = len(sorted_prices)
-    min_price = sorted_prices[0]
-    
-    # 去极值：去掉最低10%和最高10%（至少保留3个样本）
-    trim_count = max(0, int(n * 0.1))
-    if n - 2 * trim_count >= 3:
-        trimmed = sorted_prices[trim_count:n-trim_count]
+
+    # 去极值（IQR）
+    sorted_p = sorted(fresh_prices)
+    n = len(sorted_p)
+    min_price = sorted_p[0]
+
+    if n >= 4:
+        q1_idx = n // 4
+        q3_idx = 3 * n // 4
+        q1 = sorted_p[q1_idx]
+        q3 = sorted_p[q3_idx]
+        iqr = q3 - q1
+        lower = q1 - 1.5 * iqr
+        upper = q3 + 1.5 * iqr
+        trimmed = [p for p in fresh_prices if lower <= p <= upper]
+        if not trimmed:
+            trimmed = fresh_prices
     else:
-        # 样本太少，不去极值，直接用全部
-        trimmed = sorted_prices
-    
+        trimmed = fresh_prices
+
     trimmed_avg = sum(trimmed) / len(trimmed)
-    
+
     return {
         "prices": fresh_prices,
         "sample_count": n,
-        "min_price": min_price,
         "trimmed_avg": round(trimmed_avg, 2),
+        "min_price": min_price,
         "latest_listed_at": latest_listed_at,
         "freshness": "fresh",
     }
@@ -405,11 +394,11 @@ def format_report(analysis_json):
 
 # === 主流程 ===
 def main():
-    print("🚀 DarkerDB AI Trader 启动（/v2/market 新鲜样本模式）...")
+    print("🚀 DarkerDB AI Trader 启动（/v2/price-checks 新鲜挂牌模式）...")
     print(f"⏰ 时间窗口：最近 {FRESH_WINDOW_HOURS} 小时")
     today = datetime.now().strftime("%Y-%m-%d")
     mem = load_memory()
-    print("🔍 查询市场价格（仅新鲜样本）...")
+    print("🔍 查询市场价格（仅新鲜挂牌）...")
     current_data = []
     skipped = []
     missing_ids = {}
@@ -422,29 +411,21 @@ def main():
         if not item_id:
             print(f"  ❌ {name}: 无法解析 item_id")
             continue
-        
-        # 从 item_id 推导 archetype（去掉末尾的 _数字 后缀）
-        # 例如 id.item.troll_blood_5001 -> id.item.troll_blood
-        parts = item_id.rsplit("_", 1)
-        if len(parts) == 2 and parts[1].isdigit():
-            archetype = parts[0]
-        else:
-            archetype = item_id
-        
-        # 获取新鲜样本
-        result = get_fresh_samples(archetype, rarity, max_age_hours=FRESH_WINDOW_HOURS)
-        
+
+        # 使用 price-checks 获取新鲜挂牌
+        result = get_fresh_price_checks(item_id, rarity, max_age_hours=FRESH_WINDOW_HOURS)
+
         if not result or result["freshness"] != "fresh" or result["sample_count"] == 0:
-            msg = f"{name}|{rarity}: {FRESH_WINDOW_HOURS}小时内无新鲜样本"
+            msg = f"{name}|{rarity}: {FRESH_WINDOW_HOURS}小时内无新鲜挂牌"
             print(f"  ⚠️ {msg}")
             skipped.append(msg)
             continue
-        
+
         price = result["trimmed_avg"]
         print(f"  ✅ {name}|{rarity}: 新鲜均价={price} "
               f"(样本:{result['sample_count']} 最低:{result['min_price']} "
               f"最新上架:{result['latest_listed_at']})")
-        
+
         # 计算偏离度
         series = get_price_series(mem, f"{name}|{rarity}")
         if len(series) >= 2:
@@ -456,16 +437,21 @@ def main():
                 hist_avg = price
                 dev = 0
         else:
-            hist_avg = price
-            dev = 0
-        
+            # 首日：用当日最低价作为基准
+            day_min = result["min_price"]
+            if day_min and day_min > 0:
+                dev = ((price - day_min) / day_min) * 100
+            else:
+                dev = 0
+            hist_avg = day_min if day_min else price
+
         if dev < BUY_T:
             signal = "BUY"
         elif dev > SELL_T:
             signal = "SELL"
         else:
             signal = "HOLD"
-        
+
         current_data.append({
             "item": f"{name}|{rarity}",
             "current_price": price,
@@ -474,17 +460,17 @@ def main():
             "signal": signal,
             "sample_size": result["sample_count"]
         })
-        
+
         add_memory(mem, f"{name}|{rarity}", today, price)
         mem[f"__id__{name}"] = item_id
-        time.sleep(1)  # 限流保护：60次/60秒
-    
+        time.sleep(1)  # 限流保护
+
     if not current_data:
         print("❌ 没有获取到任何新鲜价格数据")
         if skipped:
-            print(f"⚠️ 跳过 {len(skipped)} 个物品（无新鲜样本）")
+            print(f"⚠️ 跳过 {len(skipped)} 个物品（无新鲜挂牌）")
         return
-    
+
     memory_context = {}
     for entry in current_data:
         key = entry["item"]
@@ -494,7 +480,7 @@ def main():
                 "price_history": [{"date": d, "price": p} for d, p in series[-10:]],
                 "data_points": len(series)
             }
-    
+
     print("\n🤖 AI 分析中...")
     analysis_json = analyze_with_ai(current_data, memory_context)
     if not analysis_json:
@@ -504,13 +490,13 @@ def main():
             emoji = {"BUY": "🟢", "SELL": "🔴", "HOLD": "⚪"}.get(e["signal"], "⚪")
             lines.append(f"{emoji} {e['item']}: 新鲜均价={e['current_price']} (偏离{e['deviation_pct']}%) [样本:{e['sample_size']}]")
         if skipped:
-            lines.append(f"\n⚠️ 跳过 {len(skipped)} 个物品（{FRESH_WINDOW_HOURS}小时内无新鲜样本）")
+            lines.append(f"\n⚠️ 跳过 {len(skipped)} 个物品（{FRESH_WINDOW_HOURS}小时内无新鲜挂牌）")
         report = "\n".join(lines)
     else:
         report = format_report(analysis_json)
         if skipped:
-            report += f"\n\n⚠️ 另有 {len(skipped)} 个物品在{FRESH_WINDOW_HOURS}小时内无新鲜样本，未参与分析"
-    
+            report += f"\n\n⚠️ 另有 {len(skipped)} 个物品在{FRESH_WINDOW_HOURS}小时内无新鲜挂牌，未参与分析"
+
     save_memory(mem)
     print("📤 推送报告到微信...")
     title = f"📊 DarkerDB 市场分析 | {datetime.now().strftime('%m-%d %H:%M')}"
