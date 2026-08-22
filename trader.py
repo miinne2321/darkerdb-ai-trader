@@ -1,6 +1,6 @@
 """
 DarkerDB AI Trader - 云端版（Server酱推送）
-超级调试版：打印所有中间步骤，定位 price-checks 失败原因
+修复：先通过 /v2/items 解析精确变体 ID，再调用 /v2/price-checks
 """
 import os
 import json
@@ -47,10 +47,6 @@ def safe_get(url, params=None, retries=3):
     for i in range(retries):
         try:
             r = requests.get(url, headers=headers, params=params or {}, timeout=30)
-            if DEBUG:
-                print(f"    [DEBUG safe_get] URL: {url[:80]}... Status: {r.status_code}")
-                if r.status_code != 200:
-                    print(f"    [DEBUG safe_get] Response preview: {r.text[:300]}")
             if r.status_code == 200:
                 return r
             elif r.status_code == 429:
@@ -59,27 +55,21 @@ def safe_get(url, params=None, retries=3):
                 time.sleep(retry_after)
                 continue
             return None
-        except Exception as e:
-            print(f"    ⚠️ safe_get 异常: {e}")
+        except:
             if i < 2: time.sleep(2)
     return None
 
 def norm(s):
     return (s or "").strip().lower().replace("’", "'").replace("'", "").replace("-", " ").replace("_", " ").replace("(", "").replace(")", "").replace(":", "")
 
-def resolve_item_id(name):
+def resolve_archetype_id(name):
+    """Step 1: 通过 /v2/search 获取 archetype id"""
     r = safe_get("https://api.darkerdb.com/v2/search", {"q": name, "limit": 5})
     if not r:
-        print(f"    [DEBUG resolve_item_id] 搜索 {name} 失败 (HTTP non-200)")
         return None
     data = r.json()
     body = data.get("body", {})
     results = body.get("results", []) if isinstance(body, dict) else []
-    if DEBUG:
-        print(f"    [DEBUG resolve_item_id] 搜索 '{name}' 返回 {len(results)} 个结果")
-        for res in results[:3]:
-            if isinstance(res, dict):
-                print(f"      -> id={res.get('id')}, name={res.get('name')}, type={res.get('type')}")
     name_n = norm(name)
     for item in results:
         if not isinstance(item, dict) or item.get("type") != "item":
@@ -88,34 +78,85 @@ def resolve_item_id(name):
         if name_n == iname or name_n in iname or iname in name_n:
             found_id = item.get("id")
             if DEBUG:
-                print(f"    [DEBUG resolve_item_id] 选中: {found_id} ({item.get('name')})")
+                print(f"    [DEBUG] archetype_id for '{name}': {found_id}")
             return found_id
+    # 降级：返回第一个 item 类型的 id
     for item in results:
         if isinstance(item, dict) and item.get("type") == "item":
-            found_id = item.get("id")
-            if DEBUG:
-                print(f"    [DEBUG resolve_item_id] 降级选中第一个item: {found_id} ({item.get('name')})")
-            return found_id
-    print(f"    [DEBUG resolve_item_id] 未找到匹配的 item")
+            return item.get("id")
     return None
 
-def get_price_from_market_fallback(item_id, rarity):
+def resolve_exact_item_id(archetype_id, rarity):
+    """
+    Step 2: 通过 /v2/items/{archetype_id} 获取精确变体 ID
+    文档: concrete variant id 是 rarity-suffixed
+    """
+    if not archetype_id:
+        return None
+    
+    # 尝试直接构造可能的变体 ID 格式
+    # 格式1: {archetype_id}_{rarity_suffix}
+    rarity_map = {
+        "common": "1001",
+        "uncommon": "2001", 
+        "rare": "3001",
+        "epic": "5001",
+        "legendary": "6001",
+        "unique": "7001",
+        "artifact": "8001",
+        "poor": "0001"
+    }
+    suffix = rarity_map.get(rarity.lower())
+    if suffix:
+        candidate = f"{archetype_id}_{suffix}"
+        # 验证这个 ID 是否有效
+        r = safe_get(f"https://api.darkerdb.com/v2/items/{candidate}")
+        if r and r.status_code == 200:
+            if DEBUG:
+                print(f"    [DEBUG] 精确变体 ID 命中: {candidate}")
+            return candidate
+    
+    # 格式2: 如果上面失败，尝试用 /v2/items 列表查询
+    # 但这需要知道 archetype 的 base 名称
+    base_name = archetype_id.replace("id.item.", "")
+    # 去掉可能的复数形式
+    singular = base_name.rstrip('s')
+    
+    # 尝试几个常见后缀
+    for test_suffix in ["1001", "2001", "3001", "5001", "6001"]:
+        candidate = f"id.item.{singular}_{test_suffix}"
+        r = safe_get(f"https://api.darkerdb.com/v2/items/{candidate}")
+        if r and r.status_code == 200:
+            data = r.json()
+            item_data = data.get("body", {})
+            if item_data.get("rarity", "").lower() == rarity.lower():
+                if DEBUG:
+                    print(f"    [DEBUG] 精确变体 ID 命中: {candidate}")
+                return candidate
+    
+    # 如果都不行，返回原 archetype_id（Bone/Grave Essence 这种单变体物品可用）
+    if DEBUG:
+        print(f"    [DEBUG] 无法解析精确变体 ID，回退到 archetype_id: {archetype_id}")
+    return archetype_id
+
+def get_price_from_market_fallback(item_id, rarity, archetype_id=None):
     """兜底：使用 /v2/market 获取价格"""
-    params = {"item_id": item_id, "rarity": rarity, "limit": 20}
+    params = {"rarity": rarity, "limit": 20}
+    if item_id:
+        params["item_id"] = item_id
+    elif archetype_id:
+        params["archetype"] = archetype_id.replace("id.item.", "")
+    
     r = safe_get("https://api.darkerdb.com/v2/market", params)
     if not r:
         return None
     data = r.json()
     body = data.get("body")
     if not body:
-        if DEBUG:
-            print(f"    [DEBUG market_fallback] body 为空")
         return None
     
     listings = body.get("listings", [])
     if not listings:
-        if DEBUG:
-            print(f"    [DEBUG market_fallback] listings 为空")
         return None
     
     prices = [float(l.get("price")) for l in listings if l.get("price") and l.get("price") > 0]
@@ -146,24 +187,19 @@ def get_fresh_price_checks(item_id, rarity,
     不够时补充 similar_sales，再不够用 /v2/market 兜底。
     """
     params = {"item_id": item_id, "rarity": rarity}
-    if DEBUG:
-        print(f"    [DEBUG get_fresh_price_checks] 请求参数: item_id={item_id}, rarity={rarity}")
     r = safe_get("https://api.darkerdb.com/v2/price-checks", params)
     if not r:
-        print(f"    [DEBUG get_fresh_price_checks] safe_get 返回 None")
         return None
     
-    try:
-        data = r.json()
-    except Exception as e:
-        print(f"    [DEBUG get_fresh_price_checks] JSON 解析失败: {e}")
+    if r.status_code == 404:
+        # 404 意味着 item_id 不对，需要回退到 /v2/market
+        if DEBUG:
+            print(f"    [DEBUG] price-checks 404，回退到 /v2/market")
         return None
     
+    data = r.json()
     body = data.get("body")
     if not body:
-        print(f"    [DEBUG get_fresh_price_checks] body 为空或缺失")
-        if DEBUG:
-            print(f"    [DEBUG get_fresh_price_checks] 完整响应 keys: {list(data.keys())}")
         return None
 
     now = datetime.now(timezone.utc)
@@ -174,19 +210,9 @@ def get_fresh_price_checks(item_id, rarity,
     similar_sales = body.get("similar_sales", [])
     if DEBUG:
         print(f"    [DEBUG] similar_listings={len(similar_listings)}, similar_sales={len(similar_sales)}")
-        if similar_listings:
-            # 打印第一条和最后一条的时间
-            first_time = similar_listings[0].get("listed_at", "N/A")
-            last_time = similar_listings[-1].get("listed_at", "N/A")
-            print(f"    [DEBUG] listings 时间范围: {first_time} ~ {last_time}")
-        if similar_sales:
-            first_time = similar_sales[0].get("sold_at", "N/A")
-            last_time = similar_sales[-1].get("sold_at", "N/A")
-            print(f"    [DEBUG] sales 时间范围: {first_time} ~ {last_time}")
 
     # 收集新鲜 listings
     fresh_prices = []
-    latest_listed_at = None
     for listing in similar_listings:
         listed_at = listing.get("listed_at")
         if not listed_at:
@@ -195,8 +221,6 @@ def get_fresh_price_checks(item_id, rarity,
             lt = datetime.fromisoformat(listed_at.replace("Z", "+00:00"))
             if lt < listing_cutoff:
                 continue
-            if latest_listed_at is None or listed_at > latest_listed_at:
-                latest_listed_at = listed_at
         except:
             continue
         price = listing.get("price")
@@ -204,12 +228,8 @@ def get_fresh_price_checks(item_id, rarity,
             fresh_prices.append(float(price))
 
     source = "listings"
-    if DEBUG:
-        print(f"    [DEBUG] 过滤后新鲜 listings 数量: {len(fresh_prices)}")
-    
     # 如果 listings 不够，补充 sales
     if len(fresh_prices) < min_samples:
-        before = len(fresh_prices)
         for sale in similar_sales:
             sold_at = sale.get("sold_at")
             if not sold_at:
@@ -223,26 +243,11 @@ def get_fresh_price_checks(item_id, rarity,
             price = sale.get("price")
             if price and price > 0:
                 fresh_prices.append(float(price))
-        if DEBUG:
-            print(f"    [DEBUG] 补充 sales 后总数: {len(fresh_prices)} (新增 {len(fresh_prices)-before})")
         if len(fresh_prices) >= min_samples:
             source = "mixed"
 
     if not fresh_prices:
-        if DEBUG:
-            print(f"    [DEBUG] price-checks 无新鲜样本，尝试 /v2/market 兜底")
-        fallback = get_price_from_market_fallback(item_id, rarity)
-        if fallback:
-            return fallback
-        return {
-            "prices": [],
-            "sample_count": 0,
-            "trimmed_avg": None,
-            "min_price": None,
-            "latest_listed_at": None,
-            "freshness": "empty",
-            "source": None,
-        }
+        return None
 
     # IQR 去极值
     sorted_p = sorted(fresh_prices)
@@ -265,15 +270,12 @@ def get_fresh_price_checks(item_id, rarity,
 
     trimmed_avg = sum(trimmed) / len(trimmed)
 
-    freshness = "fresh" if source == "listings" else "low"
-
     return {
         "prices": fresh_prices,
         "sample_count": n,
         "trimmed_avg": round(trimmed_avg, 2),
         "min_price": min_price,
-        "latest_listed_at": latest_listed_at,
-        "freshness": freshness,
+        "freshness": "fresh" if source == "listings" else "low",
         "source": source,
     }
 
@@ -440,33 +442,52 @@ def format_report(analysis_text):
 
 # === 主流程 ===
 def main():
-    print("🚀 DarkerDB AI Trader 启动（超级调试版）...")
-    print(f"⏰ 挂牌窗口：最近 {LISTING_WINDOW_HOURS} 小时 | 成交窗口：最近 {SALE_WINDOW_HOURS} 小时")
+    print("🚀 DarkerDB AI Trader 启动（精确变体 ID 修复版）...")
     today = datetime.now().strftime("%Y-%m-%d")
     mem = load_memory()
     print("🔍 查询市场价格...")
     current_data = []
     skipped = []
     fallback_used = []
-    missing_ids = {}
     for name, rarity in WATCHLIST:
         print(f"\n--- 处理 {name}|{rarity} ---")
-        cache_key = f"__id__{name}"
-        item_id = mem.get(cache_key) if cache_key in mem else missing_ids.get(name)
-        if not item_id:
-            item_id = resolve_item_id(name)
-            missing_ids[name] = item_id
-        if not item_id:
+        
+        # 缓存键
+        cache_key_id = f"__exact_id__{name}|{rarity}"
+        cache_key_arch = f"__arch_id__{name}"
+        
+        archetype_id = mem.get(cache_key_arch)
+        exact_item_id = mem.get(cache_key_id)
+        
+        if not archetype_id:
+            archetype_id = resolve_archetype_id(name)
+            if archetype_id:
+                mem[cache_key_arch] = archetype_id
+        
+        if not exact_item_id and archetype_id:
+            exact_item_id = resolve_exact_item_id(archetype_id, rarity)
+            if exact_item_id:
+                mem[cache_key_id] = exact_item_id
+        
+        if not exact_item_id:
             print(f"  ❌ {name}: 无法解析 item_id")
-            skipped.append(f"{name}|{rarity}: 无法解析 item_id")
+            skipped.append(f"{name}|{rarity}: 无法解析 ID")
             continue
         
-        print(f"  item_id: {item_id}")
-
-        # 使用 price-checks
-        result = get_fresh_price_checks(item_id, rarity)
-
-        if not result or result["freshness"] == "empty" or result["sample_count"] == 0:
+        print(f"  exact_item_id: {exact_item_id}")
+        
+        # 尝试 price-checks
+        result = get_fresh_price_checks(exact_item_id, rarity)
+        
+        # 如果 price-checks 失败，用 /v2/market 兜底
+        if not result:
+            if DEBUG:
+                print(f"    [DEBUG] price-checks 无数据，尝试 /v2/market 兜底")
+            result = get_price_from_market_fallback(exact_item_id, rarity, archetype_id)
+            if result:
+                fallback_used.append(f"{name}|{rarity}")
+        
+        if not result or result["sample_count"] == 0:
             msg = f"{name}|{rarity}: 无有效样本"
             print(f"  ⚠️ {msg}")
             skipped.append(msg)
@@ -479,9 +500,6 @@ def main():
             "sales": "成交",
             "fallback": "兜底(/v2/market)"
         }.get(result["source"], "?")
-        
-        if result["source"] == "fallback":
-            fallback_used.append(f"{name}|{rarity}")
         
         print(f"  ✅ {name}|{rarity}: 均价={price} "
               f"(样本:{result['sample_count']} 最低:{result['min_price']} "
@@ -522,13 +540,12 @@ def main():
         })
 
         add_memory(mem, f"{name}|{rarity}", today, price)
-        mem[f"__id__{name}"] = item_id
         time.sleep(1)
 
     if not current_data:
         print("❌ 没有获取到任何价格数据")
         if skipped:
-            print(f"⚠️ 跳过 {len(skipped)} 个物品")
+            print(f"⚠️ 跳过 {len(skipped)} 个物品: {skipped}")
         return
 
     memory_context = {}
