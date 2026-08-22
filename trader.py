@@ -1,14 +1,14 @@
 """
 DarkerDB AI Trader - 云端版（Server酱推送）
+强制绕过缓存，增加调试打印，使用最低价作为当前价
 """
 import os
 import json
 import time
 import requests
 from datetime import datetime, timedelta
-from collections import defaultdict
+import re
 
-# === 从环境变量读取密钥 ===
 DARKERDB_KEY = os.environ["DARKERDB_KEY"]
 OPENROUTER_KEY = os.environ["OPENROUTER_KEY"]
 SERVERCHAN_SENDKEY = os.environ["SERVERCHAN_SENDKEY"]
@@ -70,7 +70,6 @@ WATCHLIST = [
     ("Billet", "common"),
     ("Bowstring", "common"),
     ("Torn Sail", "common"),
-    ("Hard Crab Shell", "uncommon"),
     ("Bat Claw", "common"),
     ("Sharp Sea Urchin Spine", "uncommon"),
     ("Grave Essence", "uncommon"),
@@ -100,14 +99,18 @@ WATCHLIST = [
 # === 信号阈值 ===
 BUY_T = -15
 SELL_T = 20
-AVG_DAYS = 7
 PER_ITEM_LIMIT = 20
 MIN_VALID_PRICE = 1
 HISTORY_FILE = "price_memory.json"
 
 # === 工具函数 ===
 def safe_get(url, params=None, retries=3):
-    headers = {"X-API-Key": DARKERDB_KEY, "X-API-Version": "2026-08-03"}
+    headers = {
+        "X-API-Key": DARKERDB_KEY,
+        "X-API-Version": "2026-08-03",
+        "Cache-Control": "no-cache",   # 强制绕过缓存
+        "Pragma": "no-cache"           # 兼容老版本
+    }
     for i in range(retries):
         try:
             r = requests.get(url, headers=headers, params=params or {}, timeout=30)
@@ -164,6 +167,12 @@ def query_market(archetype, rarity):
     if not r:
         return []
     body = r.json().get("body", [])
+    
+    # 调试：打印第一条挂牌的信息（id、price_per_unit、当前时间）
+    if body:
+        first = body[0]
+        print(f"  [DEBUG] {first.get('name')} id={first.get('id')} ppu={first.get('price_per_unit')} at {datetime.now().strftime('%H:%M:%S')}")
+    
     prices = []
     for m in body:
         ppu = m.get("price_per_unit")
@@ -249,7 +258,7 @@ def analyze_with_ai(current_data, memory_context):
         "model": "openrouter/free",
         "messages": [{"role": "user", "content": prompt}],
         "response_format": {"type": "json_object"},
-        "max_tokens": 4000
+        "max_tokens": 4096
     }
     try:
         r = requests.post("https://openrouter.ai/api/v1/chat/completions",
@@ -257,22 +266,19 @@ def analyze_with_ai(current_data, memory_context):
         if r.status_code == 200:
             return r.json()["choices"][0]["message"]["content"]
         else:
+            print(f"⚠️ AI API 返回 {r.status_code}: {r.text[:200]}")
             return None
-    except:
+    except Exception as e:
+        print(f"⚠️ AI 调用异常: {e}")
         return None
 
 # === Server酱 推送 ===
 def push_to_serverchan(title, content):
-    """推送到微信（Server酱）"""
     sendkey = SERVERCHAN_SENDKEY
     if not sendkey:
         print("⚠️ 未配置 SERVERCHAN_SENDKEY")
         return
-    
-    # 根据 SendKey 前缀自动选择 API 端点 [1](@ref)
     if sendkey.startswith("sctp"):
-        # Server酱³: 提取 sctp 和 t 之间的数字作为 uid
-        import re
         match = re.match(r'^sctp(\d+)t', sendkey)
         if match:
             uid = match.group(1)
@@ -281,13 +287,9 @@ def push_to_serverchan(title, content):
             print("⚠️ SendKey 格式错误")
             return
     else:
-        # Server酱 Turbo
         url = f"https://sctapi.ftqq.com/{sendkey}.send"
-    
-    # 内容截断，避免超长
-    if len(content) > 40000:
-        content = content[:40000] + "\n...(截断)"
-    
+    if len(content) > 32000:
+        content = content[:32000] + "\n...(截断)"
     data = {"title": title, "desp": content}
     try:
         r = requests.post(url, data=data, timeout=10)
@@ -300,18 +302,14 @@ def push_to_serverchan(title, content):
         print(f"⚠️ 推送异常: {e}")
 
 def format_report(analysis_json):
-    """把 AI 的 JSON 输出格式化为可读报告"""
     try:
         data = json.loads(analysis_json)
     except:
         return f"⚠️ AI 分析解析失败:\n{analysis_json[:1500]}"
-    
     lines = [f"📊 **DarkerDB AI 市场分析报告** | {datetime.now().strftime('%Y-%m-%d %H:%M')}"]
-    lines.append("=" * 50)
-    
+    lines.append("=" * 40)
     analyses = data.get("analyses", [])
     signal_count = {"BUY": 0, "SELL": 0, "HOLD": 0}
-    
     for a in analyses:
         signal = a.get("signal", "HOLD")
         signal_count[signal] = signal_count.get(signal, 0) + 1
@@ -324,52 +322,38 @@ def format_report(analysis_json):
         lines.append(f"   ⚠️ 风险: {a.get('risk', '?')}")
         if a.get("position_note"):
             lines.append(f"   📌 持仓: {a['position_note']}")
-    
     overview = data.get("market_overview", "")
     if overview:
-        lines.append(f"\n{'='*50}")
+        lines.append(f"\n{'='*40}")
         lines.append(f"📋 **市场总览**: {overview}")
-    
-    lines.append(f"\n{'='*50}")
+    lines.append(f"\n{'='*40}")
     lines.append(f"📊 信号统计: 🟢BUY {signal_count['BUY']} | 🔴SELL {signal_count['SELL']} | ⚪HOLD {signal_count['HOLD']}")
-    
     return "\n".join(lines)
 
 # === 主流程 ===
 def main():
     print("🚀 DarkerDB AI Trader 启动...")
     today = datetime.now().strftime("%Y-%m-%d")
-    
-    # 1. 加载长期记忆
     mem = load_memory()
-    
-    # 2. 解析 item_id 并查价格
     print("🔍 查询市场价格...")
     current_data = []
     missing_ids = {}
-    
     for name, rarity in WATCHLIST:
         cache_key = f"__id__{name}"
         item_id = mem.get(cache_key) if cache_key in mem else missing_ids.get(name)
-        
         if not item_id:
             item_id = resolve_item_id(name)
             missing_ids[name] = item_id
-        
         if not item_id:
             print(f"  ❌ {name}: 无法解析")
             continue
-        
         archetype = derive_archetype(item_id)
         prices = query_market(archetype, rarity)
-        
         if not prices:
             print(f"  ⚠️ {name}|{rarity}: 无有效挂牌")
             continue
-        
-        current = min(prices)
+        current = min(prices)  # 使用最低价（不加过滤）
         avg_list = sum(prices) / len(prices)
-        
         series = get_price_series(mem, f"{name}|{rarity}")
         if len(series) >= 2:
             past_prices = [p for _, p in series[:-1]]
@@ -382,14 +366,12 @@ def main():
         else:
             hist_avg = current
             dev = 0
-        
         if dev < BUY_T:
             signal = "BUY"
         elif dev > SELL_T:
             signal = "SELL"
         else:
             signal = "HOLD"
-        
         current_data.append({
             "item": f"{name}|{rarity}",
             "current_price": current,
@@ -398,18 +380,13 @@ def main():
             "signal": signal,
             "sample_size": len(prices)
         })
-        
         add_memory(mem, f"{name}|{rarity}", today, current)
         mem[f"__id__{name}"] = item_id
-        
         print(f"  ✅ {name}|{rarity}: {current} ({signal})")
         time.sleep(0.5)
-    
     if not current_data:
         print("❌ 没有获取到任何价格数据")
         return
-    
-    # 3. 构建历史记忆上下文
     memory_context = {}
     for entry in current_data:
         key = entry["item"]
@@ -419,11 +396,8 @@ def main():
                 "price_history": [{"date": d, "price": p} for d, p in series[-10:]],
                 "data_points": len(series)
             }
-    
-    # 4. 调 AI 分析
     print("\n🤖 AI 分析中...")
     analysis_json = analyze_with_ai(current_data, memory_context)
-    
     if not analysis_json:
         print("⚠️ AI 分析失败，使用基础报告")
         lines = [f"📊 价格报告 | {today}"]
@@ -433,17 +407,11 @@ def main():
         report = "\n".join(lines)
     else:
         report = format_report(analysis_json)
-    
-    # 5. 保存记忆
     save_memory(mem)
-    
-    # 6. 推送到微信（Server酱）
     print("📤 推送报告到微信...")
     title = f"📊 DarkerDB 市场分析 | {datetime.now().strftime('%m-%d %H:%M')}"
     push_to_serverchan(title, report)
-    
-    # 7. 打印报告到日志（方便 GitHub Actions 里查看）
-    print("\n" + "=" * 50)
+    print("\n" + "=" * 40)
     print(report[:2000])
     print(f"\n✅ 完成！报告已发送到微信")
 
