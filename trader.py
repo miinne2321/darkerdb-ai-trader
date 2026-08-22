@@ -1,6 +1,6 @@
 """
 DarkerDB AI Trader - 云端版（Server酱推送）
-修复确认：/v2/market 兜底用 archetype=id.item.XXX 参数
+Bug 修复：/v2/market 的 body 是列表不是字典
 Obsidian Ore 替换 Copper Ore
 """
 import os
@@ -88,7 +88,7 @@ def resolve_archetype_id(name):
 def get_price_from_market_fallback(archetype_id, rarity):
     """
     兜底：用 /v2/market?archetype=id.item.XXX
-    测试验证：archetype 参数必须带 id.item. 前缀才有效
+    /v2/market 的 body 直接是列表，不是 {"listings": [...]}
     """
     params = {"archetype": archetype_id, "rarity": rarity, "limit": 20}
     r = safe_get("https://api.darkerdb.com/v2/market", params)
@@ -102,7 +102,14 @@ def get_price_from_market_fallback(archetype_id, rarity):
     if not body:
         return None
     
-    listings = body.get("listings", [])
+    # 兼容：body 可能是列表，也可能是 {"listings": [...]} 字典
+    if isinstance(body, list):
+        listings = body
+    elif isinstance(body, dict):
+        listings = body.get("listings", [])
+    else:
+        return None
+    
     if not listings:
         if DEBUG:
             print(f"    [DEBUG] /v2/market fallback: 0 listings")
@@ -345,7 +352,7 @@ def format_report(analysis_text):
 
 # === 主流程 ===
 def main():
-    print("🚀 DarkerDB AI Trader 启动（Obsidian Ore 替换 + 正确兜底参数）...")
+    print("🚀 DarkerDB AI Trader 启动（Bug 修复版）...")
     today = datetime.now().strftime("%Y-%m-%d")
     mem = load_memory()
     print("🔍 查询市场价格...")
