@@ -1,12 +1,12 @@
 """
 DarkerDB AI Trader - 云端版（Server酱推送）
-Bug 修复：/v2/market 的 body 是列表不是字典
-Obsidian Ore 替换 Copper Ore
+修复：AI prompt 强制 JSON + 增强 JSON 提取 + Git 冲突处理
 """
 import os
 import json
 import time
 import requests
+import subprocess
 from datetime import datetime, timedelta, timezone
 import re
 
@@ -86,47 +86,31 @@ def resolve_archetype_id(name):
     return None
 
 def get_price_from_market_fallback(archetype_id, rarity):
-    """
-    兜底：用 /v2/market?archetype=id.item.XXX
-    /v2/market 的 body 直接是列表，不是 {"listings": [...]}
-    """
     params = {"archetype": archetype_id, "rarity": rarity, "limit": 20}
     r = safe_get("https://api.darkerdb.com/v2/market", params)
     if not r or r.status_code != 200:
-        if DEBUG:
-            print(f"    [DEBUG] /v2/market fallback failed: status={r.status_code if r else 'None'}")
         return None
-    
     data = r.json()
     body = data.get("body")
     if not body:
         return None
-    
-    # 兼容：body 可能是列表，也可能是 {"listings": [...]} 字典
     if isinstance(body, list):
         listings = body
     elif isinstance(body, dict):
         listings = body.get("listings", [])
     else:
         return None
-    
     if not listings:
-        if DEBUG:
-            print(f"    [DEBUG] /v2/market fallback: 0 listings")
         return None
-    
     prices = [float(l.get("price")) for l in listings if l.get("price") and l.get("price") > 0]
     if not prices:
         return None
-    
     if DEBUG:
         print(f"    [DEBUG] /v2/market fallback: {len(prices)} listings, 价格范围 {min(prices)}-{max(prices)}")
-    
     min_price = min(prices)
     avg_price = sum(prices) / len(prices)
     conservative = min_price * 1.1
     final = min(conservative, avg_price)
-    
     return {
         "prices": prices,
         "sample_count": len(prices),
@@ -142,129 +126,113 @@ def get_fresh_price_checks(item_id, rarity, listing_window_hours=LISTING_WINDOW_
     params = {"item_id": item_id, "rarity": rarity}
     r = safe_get("https://api.darkerdb.com/v2/price-checks", params)
     if not r or r.status_code != 200:
-        if DEBUG:
-            status = r.status_code if r else "None"
-            print(f"    [DEBUG] price-checks status={status}")
         return None
     data = r.json()
     body = data.get("body")
     if not body:
         return None
-
     now = datetime.now(timezone.utc)
     listing_cutoff = now - timedelta(hours=listing_window_hours)
     sale_cutoff = now - timedelta(hours=sale_window_hours)
-
     similar_listings = body.get("similar_listings", [])
     similar_sales = body.get("similar_sales", [])
     if DEBUG:
         print(f"    [DEBUG] similar_listings={len(similar_listings)}, similar_sales={len(similar_sales)}")
-
     fresh_prices = []
     for listing in similar_listings:
         listed_at = listing.get("listed_at")
-        if not listed_at:
-            continue
+        if not listed_at: continue
         try:
             lt = datetime.fromisoformat(listed_at.replace("Z", "+00:00"))
-            if lt < listing_cutoff:
-                continue
-        except:
-            continue
+            if lt < listing_cutoff: continue
+        except: continue
         price = listing.get("price")
         if price and price > 0:
             fresh_prices.append(float(price))
-
     source = "listings"
     if len(fresh_prices) < min_samples:
         for sale in similar_sales:
             sold_at = sale.get("sold_at")
-            if not sold_at:
-                continue
+            if not sold_at: continue
             try:
                 st = datetime.fromisoformat(sold_at.replace("Z", "+00:00"))
-                if st < sale_cutoff:
-                    continue
-            except:
-                continue
+                if st < sale_cutoff: continue
+            except: continue
             price = sale.get("price")
             if price and price > 0:
                 fresh_prices.append(float(price))
         if len(fresh_prices) >= min_samples:
             source = "mixed"
-
     if not fresh_prices:
         return None
-
     sorted_p = sorted(fresh_prices)
     n = len(sorted_p)
     min_price = sorted_p[0]
     if n >= 4:
-        q1 = sorted_p[n // 4]
-        q3 = sorted_p[3 * n // 4]
+        q1 = sorted_p[n // 4]; q3 = sorted_p[3 * n // 4]
         iqr = q3 - q1
-        lower = q1 - 1.5 * iqr
-        upper = q3 + 1.5 * iqr
+        lower = q1 - 1.5 * iqr; upper = q3 + 1.5 * iqr
         trimmed = [p for p in fresh_prices if lower <= p <= upper]
-        if not trimmed:
-            trimmed = fresh_prices
+        if not trimmed: trimmed = fresh_prices
     else:
         trimmed = fresh_prices
     trimmed_avg = sum(trimmed) / len(trimmed)
     return {
-        "prices": fresh_prices,
-        "sample_count": n,
-        "trimmed_avg": round(trimmed_avg, 2),
-        "min_price": min_price,
-        "freshness": "fresh" if source == "listings" else "low",
-        "source": source,
+        "prices": fresh_prices, "sample_count": n,
+        "trimmed_avg": round(trimmed_avg, 2), "min_price": min_price,
+        "freshness": "fresh" if source == "listings" else "low", "source": source,
     }
 
 # === 长期记忆 ===
 def load_memory():
     if os.path.exists(HISTORY_FILE):
-        try:
-            return json.load(open(HISTORY_FILE, encoding="utf-8"))
-        except:
-            pass
+        try: return json.load(open(HISTORY_FILE, encoding="utf-8"))
+        except: pass
     return {}
 
 def save_memory(mem):
     json.dump(mem, open(HISTORY_FILE, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
 
 def get_price_series(mem, key, days=30):
-    if key not in mem:
-        return []
+    if key not in mem: return []
     prices = mem[key].get("prices", {})
     cut = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
     return sorted([(k, v) for k, v in prices.items() if k >= cut])
 
 def add_memory(mem, key, today, price):
-    if key not in mem:
-        mem[key] = {"prices": {}}
+    if key not in mem: mem[key] = {"prices": {}}
     mem[key]["prices"][today] = price
     prices = mem[key]["prices"]
     old = [k for k in prices if k < (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")]
-    for k in old:
-        del prices[k]
+    for k in old: del prices[k]
 
 # === AI 分析 ===
 def extract_json(text):
+    # 方法1：直接解析
     try:
         return json.loads(text)
     except:
         pass
-    s = text.find('{')
-    e = text.rfind('}')
-    if s != -1 and e != -1 and e > s:
+    # 方法2：找第一个 { 和最后一个 }
+    start = text.find('{')
+    end = text.rfind('}')
+    if start != -1 and end != -1 and end > start:
         try:
-            return json.loads(text[s:e+1])
+            return json.loads(text[start:end+1])
         except:
             pass
+    # 方法3：正则匹配最外层 JSON 对象
+    pattern = r'\{(?:[^{}]|(?:\{[^{}]*\}))*\}'
+    matches = re.findall(pattern, text)
+    for match in matches:
+        try:
+            return json.loads(match)
+        except:
+            continue
     return None
 
 def analyze_with_ai(current_data, memory_context):
-    prompt = f"""你是 Dark and Darker 游戏市场分析师 AI。基于提供的材料/消耗品价格数据，完成分析：
+    prompt = f"""你是 Dark and Darker 游戏市场分析师 AI。基于提供的材料/消耗品价格数据，完成分析。
 
 【当前价格数据】（物品|品质, 当前新鲜均价, 7日均价, 偏离%）：
 {json.dumps(current_data, ensure_ascii=False, indent=2)}
@@ -272,14 +240,27 @@ def analyze_with_ai(current_data, memory_context):
 【历史记忆】（price_history 为该物品历史价格记录，data_points 为有效数据点数）：
 {json.dumps(memory_context, ensure_ascii=False, indent=2)}
 
-请对每个物品输出 JSON：
-{{"analyses":[{{"item":"物品名|品质","signal":"BUY/SELL/HOLD","current_price":数值,
-"reason":"波动原因推测，不确定说'原因不明'，禁止编造版本号",
-"trend":"上涨/下跌/震荡/样本不足","trend_basis":"趋势依据，data_points<2 时说明样本不足",
-"advice":"具体建议","risk":"低/中/高","position_note":"持仓备注或null"}}],
-"market_overview":"整体市场1-2句总结"}}
-
-只输出 JSON，不要其他文字。"""
+请严格按照以下要求输出：
+1. 只输出一个 JSON 对象，不要任何其他文字、解释或思考过程。
+2. JSON 格式如下：
+{{
+  "analyses": [
+    {{
+      "item": "物品名|品质",
+      "signal": "BUY/SELL/HOLD",
+      "current_price": 数值,
+      "reason": "波动原因推测，不确定说'原因不明'，禁止编造版本号",
+      "trend": "上涨/下跌/震荡/样本不足",
+      "trend_basis": "趋势依据，data_points<2 时说明样本不足",
+      "advice": "具体建议",
+      "risk": "低/中/高",
+      "position_note": "持仓备注或null"
+    }}
+  ],
+  "market_overview": "整体市场1-2句总结"
+}}
+3. 即使 data_points=1，也必须基于当前偏离度给出信号和建议。
+4. 不要输出任何 JSON 以外的内容。"""
 
     headers = {
         "Authorization": f"Bearer {OPENROUTER_KEY}",
@@ -289,7 +270,7 @@ def analyze_with_ai(current_data, memory_context):
         "model": "openrouter/free",
         "messages": [{"role": "user", "content": prompt}],
         "response_format": {"type": "json_object"},
-        "max_tokens": 8192
+        "max_tokens": 4096
     }
     try:
         r = requests.post("https://openrouter.ai/api/v1/chat/completions",
@@ -328,7 +309,8 @@ def push_to_serverchan(title, content):
 def format_report(analysis_text):
     data = extract_json(analysis_text)
     if not data:
-        return f"⚠️ AI 分析解析失败:\n{analysis_text[:1500]}"
+        # 如果提取失败，返回原始文本前1500字符作为调试信息
+        return f"⚠️ AI 分析解析失败，原始响应:\n{analysis_text[:1500]}"
     lines = [f"📊 **DarkerDB AI 市场分析报告** | {datetime.now().strftime('%Y-%m-%d %H:%M')}", "=" * 46]
     sc = {"BUY": 0, "SELL": 0, "HOLD": 0}
     for a in data.get("analyses", []):
@@ -352,7 +334,7 @@ def format_report(analysis_text):
 
 # === 主流程 ===
 def main():
-    print("🚀 DarkerDB AI Trader 启动（Bug 修复版）...")
+    print("🚀 DarkerDB AI Trader 启动（AI 修复版）...")
     today = datetime.now().strftime("%Y-%m-%d")
     mem = load_memory()
     print("🔍 查询市场价格...")
@@ -365,8 +347,7 @@ def main():
         exact_id = mem.get(ck_id)
         if not arch_id:
             arch_id = resolve_archetype_id(name)
-            if arch_id:
-                mem[ck_arch] = arch_id
+            if arch_id: mem[ck_arch] = arch_id
         if not exact_id and arch_id:
             exact_id = arch_id
             mem[ck_id] = exact_id
@@ -381,15 +362,14 @@ def main():
             if DEBUG:
                 print(f"    [DEBUG] price-checks 无数据，尝试 /v2/market 兜底 (archetype={arch_id})")
             result = get_price_from_market_fallback(arch_id, rarity)
-            if result:
-                fallback_used.append(f"{name}|{rarity}")
+            if result: fallback_used.append(f"{name}|{rarity}")
         if not result or result["sample_count"] == 0:
             print(f"  ⚠️ {name}|{rarity}: 无有效样本")
             skipped.append(f"{name}|{rarity}: 无有效样本")
             continue
 
         price = result["trimmed_avg"]
-        src = {"listings": "挂牌", "mixed": "挂牌+成交", "sales": "成交", "fallback": "兜底(/v2/market)"}.get(result["source"], "?")
+        src = {"listings": "挂牌", "mixed": "挂牌+成交", "sales": "成交", "market_fallback": "兜底(/v2/market)"}.get(result["source"], "?")
         print(f"  ✅ {name}|{rarity}: 均价={price} (样本:{result['sample_count']} 最低:{result['min_price']} 来源:{src})")
 
         series = get_price_series(mem, f"{name}|{rarity}")
@@ -415,8 +395,7 @@ def main():
 
     if not current_data:
         print("❌ 无数据")
-        if skipped:
-            print(f"⚠️ 跳过 {len(skipped)} 个: {skipped}")
+        if skipped: print(f"⚠️ 跳过 {len(skipped)} 个: {skipped}")
         return
 
     mc = {}
@@ -431,34 +410,48 @@ def main():
     print("\n🤖 AI 分析中...")
     at = analyze_with_ai(current_data, mc)
     if not at:
-        print("⚠️ AI 失败，基础报告")
+        print("⚠️ AI 失败，使用基础报告")
         lines = [f"📊 价格报告 | {today}"]
         for e in current_data:
             em = {"BUY": "🟢", "SELL": "🔴", "HOLD": "⚪"}.get(e["signal"], "⚪")
             lines.append(f"{em} {e['item']}: 均价={e['current_price']} (偏离{e['deviation_pct']}%) [样本:{e['sample_size']}]")
-        if fallback_used:
-            lines.append(f"\n🔄 兜底: {', '.join(fallback_used)}")
-        if skipped:
-            lines.append(f"\n⚠️ 跳过 {len(skipped)} 个")
+        if fallback_used: lines.append(f"\n🔄 兜底: {', '.join(fallback_used)}")
+        if skipped: lines.append(f"\n⚠️ 跳过 {len(skipped)} 个")
         report = "\n".join(lines)
     else:
         report = format_report(at)
         extra = ""
-        if fallback_used:
-            extra += f"\n\n🔄 兜底: {', '.join(fallback_used)}"
-        if skipped:
-            extra += f"\n\n⚠️ 跳过 {len(skipped)} 个: {', '.join(skipped)}"
+        if fallback_used: extra += f"\n\n🔄 兜底: {', '.join(fallback_used)}"
+        if skipped: extra += f"\n\n⚠️ 跳过 {len(skipped)} 个: {', '.join(skipped)}"
         report += extra
 
     save_memory(mem)
     print("📤 推送...")
-    push_to_serverchan(
-        f"📊 DarkerDB 市场分析 | {datetime.now().strftime('%m-%d %H:%M')}",
-        report
-    )
+    push_to_serverchan(f"📊 DarkerDB 市场分析 | {datetime.now().strftime('%m-%d %H:%M')}", report)
     print("\n" + "=" * 46)
     print(report[:2000])
     print(f"\n✅ 完成！有数据:{len(current_data)} 跳过:{len(skipped)} 兜底:{len(fallback_used)}")
+
+    # 处理 Git push 冲突（尝试 rebase 后 push）
+    try:
+        subprocess.run(["git", "config", "--global", "user.email", "action@github.com"], capture_output=True)
+        subprocess.run(["git", "config", "--global", "user.name", "GitHub Action"], capture_output=True)
+        subprocess.run(["git", "add", HISTORY_FILE], capture_output=True)
+        subprocess.run(["git", "commit", "-m", "Update price memory"], capture_output=True)
+        # 先 pull rebase，再 push
+        pull = subprocess.run(["git", "pull", "--rebase", "origin", "main"], capture_output=True, text=True)
+        if pull.returncode != 0:
+            print(f"⚠️ Git pull 失败: {pull.stderr.strip()}")
+            # 如果 rebase 失败，尝试 force push（谨慎）
+            subprocess.run(["git", "push", "--force", "origin", "main"], capture_output=True)
+        else:
+            push = subprocess.run(["git", "push"], capture_output=True, text=True)
+            if push.returncode != 0:
+                print(f"⚠️ Git push 失败: {push.stderr.strip()}")
+                # 最后手段 force push
+                subprocess.run(["git", "push", "--force", "origin", "main"], capture_output=True)
+    except Exception as e:
+        print(f"⚠️ Git 操作异常: {e}")
 
 if __name__ == "__main__":
     main()
