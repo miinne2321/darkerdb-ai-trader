@@ -333,36 +333,37 @@ def extract_json(text):
     return None
 
 def analyze_with_ai(current_data, memory_context):
-    prompt = f"""Task: Analyze the following JSON price data and output a JSON analysis report.
+    prompt = f"""任务：分析以下价格数据，输出 JSON 格式的分析报告。
 
-Current price data (item|rarity, current_avg, 7day_avg, deviation_percent):
+当前价格数据（物品|品质, 当前均价, 7日均价, 偏离百分比）：
 {json.dumps(current_data, ensure_ascii=False, indent=2)}
 
-Historical data (with timestamps):
+历史数据（含时间戳）：
 {json.dumps(memory_context, ensure_ascii=False, indent=2)}
 
-Requirements:
-1. Output ONLY a valid JSON object, no other text, no markdown.
-2. Structure:
+要求：
+1. 只输出一个合法的 JSON 对象，不要任何其他文字、markdown 或解释。
+2. JSON 结构如下：
 {{
   "analyses": [
     {{
-      "item": "Item|Rarity",
-      "signal": "BUY" or "SELL" or "HOLD",
-      "current_price": number,
-      "reason": "brief explanation, say 'uncertain' if unknown",
-      "trend": "rising" or "falling" or "stable" or "insufficient_data",
-      "trend_basis": "explanation, mention 'insufficient_data' if data_points < 2",
-      "advice": "specific action suggestion",
-      "risk": "low" or "medium" or "high",
-      "position_note": "note or null"
+      "item": "物品名|品质",
+      "signal": "BUY" 或 "SELL" 或 "HOLD",
+      "current_price": 数值,
+      "reason": "简要中文原因，不知道就说'不确定'",
+      "trend": "上涨" 或 "下跌" 或 "震荡" 或 "样本不足",
+      "trend_basis": "趋势依据的中文说明，如果数据点少于2就说'样本不足'",
+      "advice": "具体的中文建议",
+      "risk": "低" 或 "中" 或 "高",
+      "position_note": "持仓备注或 null"
     }}
   ],
-  "summary": "1-2 sentence overall summary"
+  "summary": "1-2句中英文混合的总结"
 }}
-3. You MUST provide exactly one analysis entry for EACH item in the current price data. Do NOT skip any.
-4. Even with only 1 data point, assign a signal based on deviation_percent (negative = BUY, positive > 20 = SELL, otherwise HOLD).
-5. Keep total response concise to avoid truncation."""
+3. 必须为当前价格数据中的每一个物品都输出一条分析，不能遗漏。
+4. 即使只有一个数据点，也要根据偏离百分比给出信号（负数为 BUY，正数大于20为 SELL，其他为 HOLD）。
+5. 所有文本内容（reason, trend_basis, advice, position_note, summary）使用中文。
+6. 保持输出简洁，避免被截断。"""
 
     headers = {
         "Authorization": f"Bearer {OPENROUTER_KEY}",
@@ -380,7 +381,7 @@ Requirements:
         payload = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 6000   # 调大，避免长输出被截断
+            "max_tokens": 8000
         }
         try:
             r = requests.post("https://openrouter.ai/api/v1/chat/completions",
@@ -392,7 +393,6 @@ Requirements:
                 if "User Safety" in content or (content.strip().lower().startswith("safe") and len(content) < 80):
                     print(f"    ⚠️ {model} blocked by safety filter, trying next...")
                     continue
-                # 尝试解析
                 parsed = extract_json(content)
                 if parsed and parsed.get("analyses"):
                     return content
