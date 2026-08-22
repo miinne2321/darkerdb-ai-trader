@@ -19,7 +19,7 @@
   "__id__Gold Coin Bag": "id.item.gold_coin_bag",
   "Troll's Blood|epic": {
     "prices": {
-      "2026-08-22": 2508.08
+      "2026-08-22": 2762.91
     }
   },
   "__id__Troll's Blood": "id.item.troll_blood",
@@ -31,13 +31,13 @@
   "__id__Gold Ore": "id.item.gold_ores",
   "Rubysilver Ore|epic": {
     "prices": {
-      "2026-08-22": 400.22
+      "2026-08-22": 401.82
     }
   },
   "__id__Rubysilver Ore": "id.item.rubysilver_ores",
   "Obsidian Ore|epic": {
     "prices": {
-      "2026-08-22": 315.76
+      "2026-08-22": 1877.35
     }
   },
   "__id__Obsidian Ore": "id.item.obsidian_ores",
@@ -121,7 +121,7 @@
   "__id__Surgical Kit": "id.item.surgical_kit",
   "Bandage|rare": {
     "prices": {
-      "2026-08-22": 42.92
+      "2026-08-22": 42.25
     }
   },
   "__id__Bandage": "id.item.bandage",
@@ -337,13 +337,13 @@
   "__id__Grave Essence": "id.item.grave_essence",
   "Blue Sapphire (Perfect)|epic": {
     "prices": {
-      "2026-08-22": 287.42
+      "2026-08-22": 304.5
     }
   },
   "__id__Blue Sapphire (Perfect)": "id.item.blue_sapphire",
   "Ruby (Perfect)|epic": {
     "prices": {
-      "2026-08-22": 275.18
+      "2026-08-22": 276.09
     }
   },
   "__id__Ruby (Perfect)": "id.item.ruby",
@@ -478,5 +478,7 @@
   "__arch_id__Blue Sapphire (Perfect)": "id.item.blue_sapphire",
   "__exact_id__Blue Sapphire (Perfect)|epic": "id.item.blue_sapphire_5001",
   "__arch_id__Ruby (Perfect)": "id.item.ruby",
-  "__exact_id__Ruby (Perfect)|epic": "id.item.ruby_5001"
+  "__exact_id__Ruby (Perfect)|epic": "id.item.ruby_5001",
+  "__arch_id__Obsidian Ore": "id.item.obsidian_ores",
+  "__exact_id__Obsidian Ore|epic": "id.item.obsidian_ores"
 }
