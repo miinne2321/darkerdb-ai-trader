@@ -278,23 +278,45 @@ def add_memory(mem, key, timestamp, price):
     for k in old:
         del prices[k]
 
-# ===== AI 分析（稳定免费模型 + 去敏感化 prompt）=====
+# ===== AI 分析（稳定免费模型 + 去敏感化 prompt + 健壮 JSON 解析）=====
+
+def _try_fix_json(text):
+    """尝试修复被截断/不完整的 JSON：补齐未闭合的字符串引号和花括号"""
+    # 如果字符串在某个单词中间被截断（没有闭合引号），先补一个引号
+    # 策略：统计引号数，若为奇数则在末尾补一个
+    if text.count('"') % 2 != 0:
+        text = text + '"'
+    # 补齐未闭合的花括号
+    open_braces = text.count("{")
+    close_braces = text.count("}")
+    if open_braces > close_braces:
+        text = text + "}" * (open_braces - close_braces)
+    return text
 
 def extract_json(text):
     if "User Safety" in text or (text.strip().lower().startswith("safe") and len(text) < 80):
         print("    ⚠️ AI 请求被安全过滤，尝试备用模型...")
         return None
+    # 方法1：直接解析
     try:
         return json.loads(text)
     except:
         pass
+    # 方法2：找第一个 { 和最后一个 }
     start = text.find('{')
     end = text.rfind('}')
     if start != -1 and end != -1 and end > start:
+        candidate = text[start:end+1]
         try:
-            return json.loads(text[start:end+1])
+            return json.loads(candidate)
         except:
             pass
+        # 方法3：尝试修复被截断的 JSON
+        try:
+            return json.loads(_try_fix_json(candidate))
+        except:
+            pass
+    # 方法4：正则匹配最外层 JSON 对象
     pattern = r'\{(?:[^{}]|(?:\{[^{}]*\}))*\}'
     matches = re.findall(pattern, text)
     for match in matches:
@@ -302,10 +324,15 @@ def extract_json(text):
             return json.loads(match)
         except:
             continue
+    # 方法5：对正则匹配到的再做一次修复尝试
+    for match in matches:
+        try:
+            return json.loads(_try_fix_json(match))
+        except:
+            continue
     return None
 
 def analyze_with_ai(current_data, memory_context):
-    # 去敏感化的 prompt：纯技术性数据分析，避免触发安全过滤
     prompt = f"""Task: Analyze the following JSON price data and output a JSON analysis report.
 
 Current price data (item|rarity, current_avg, 7day_avg, deviation_percent):
@@ -315,7 +342,7 @@ Historical data (with timestamps):
 {json.dumps(memory_context, ensure_ascii=False, indent=2)}
 
 Requirements:
-1. Output ONLY a valid JSON object, no other text.
+1. Output ONLY a valid JSON object, no other text, no markdown.
 2. Structure:
 {{
   "analyses": [
@@ -325,7 +352,7 @@ Requirements:
       "current_price": number,
       "reason": "brief explanation, say 'uncertain' if unknown",
       "trend": "rising" or "falling" or "stable" or "insufficient_data",
-      "trend_basis": "explanation of trend, mention 'insufficient_data' if data_points < 2",
+      "trend_basis": "explanation, mention 'insufficient_data' if data_points < 2",
       "advice": "specific action suggestion",
       "risk": "low" or "medium" or "high",
       "position_note": "note or null"
@@ -334,13 +361,13 @@ Requirements:
   "summary": "1-2 sentence overall summary"
 }}
 3. You MUST provide exactly one analysis entry for EACH item in the current price data. Do NOT skip any.
-4. Even with only 1 data point, assign a signal based on the deviation_percent (negative = BUY, positive > 20 = SELL, otherwise HOLD)."""
+4. Even with only 1 data point, assign a signal based on deviation_percent (negative = BUY, positive > 20 = SELL, otherwise HOLD).
+5. Keep total response concise to avoid truncation."""
 
     headers = {
         "Authorization": f"Bearer {OPENROUTER_KEY}",
         "Content-Type": "application/json"
     }
-    # 使用当前稳定可用的免费模型（带 :free 后缀）
     models = [
         "openrouter/free",
         "meta-llama/llama-3.3-70b-instruct:free",
@@ -349,28 +376,32 @@ Requirements:
         "qwen/qwen3-next-80b-a3b-instruct:free"
     ]
 
-    for i, model in enumerate(models):
+    for model in models:
         payload = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 4000
+            "max_tokens": 6000   # 调大，避免长输出被截断
         }
         try:
             r = requests.post("https://openrouter.ai/api/v1/chat/completions",
-                              headers=headers, json=payload, timeout=90)
+                              headers=headers, json=payload, timeout=120)
             if r.status_code == 200:
                 content = r.json()["choices"][0]["message"]["content"]
                 if DEBUG:
-                    print(f"    [DEBUG] AI response via {model}: {content[:300]}")
-                # 检查是否被安全过滤
+                    print(f"    [DEBUG] AI response via {model}: {content[:400]}")
                 if "User Safety" in content or (content.strip().lower().startswith("safe") and len(content) < 80):
                     print(f"    ⚠️ {model} blocked by safety filter, trying next...")
                     continue
-                return content
+                # 尝试解析
+                parsed = extract_json(content)
+                if parsed and parsed.get("analyses"):
+                    return content
+                else:
+                    print(f"    ⚠️ {model} 返回内容解析失败/为空，尝试下一个模型")
+                    continue
             else:
                 print(f"    ⚠️ {model} returned {r.status_code}")
                 if r.status_code == 404:
-                    print(f"        Model not available, skipping")
                     continue
         except Exception as e:
             print(f"    ⚠️ {model} error: {e}")
