@@ -26,26 +26,24 @@ DARKERDB_KEYS = [k.strip() for k in _raw_keys.split(",") if k.strip()]
 OPENROUTER_KEY = os.environ.get("OPENROUTER_KEY", "")
 SERVERCHAN_SENDKEY = os.environ.get("SERVERCHAN_SENDKEY", "")
 
-# ===== 追踪的高价物品清单（2026年8月行情，单价≥300金）=====
+# ===== 追踪的高价物品清单（已核实，均为真实存在的 epic 物品）=====
 # 格式：(物品名, 品质, 最低利润门槛%)
 WATCHLIST = [
-    # === 顶级高价材料（5%挂牌费远超15金最低）===
-    ("Troll Pelt", "epic", 0.15),              # ~5800g, 5%费=290g
-    ("Troll's Blood", "epic", 0.15),           # ~2700g, 5%费=135g
-    ("Obsidian Ore", "epic", 0.15),            # ~480g/块, 5%费=24g
-    ("Rubysilver Ore", "epic", 0.15),          # ~400g, 5%费=20g
-    ("Gold Ore", "epic", 0.20),                # ~320g, 5%费=16g（临界）
-    # === 高价值宝石（Royal/Perfect 档）===
-    ("Diamond (Royal)", "epic", 0.20),         # ~315g, 5%费=15.75g
-    ("Diamond (Perfect)", "epic", 0.25),       # ~210g, 5%费=10.5g（临界，需厚利）
-    ("Ruby (Royal)", "epic", 0.20),            # ~300g+, 5%费=15g
-    ("Sapphire (Royal)", "epic", 0.20),        # ~300g+, 5%费=15g
-    ("Emerald (Perfect)", "epic", 0.20),       # ~300g+(参考), 5%费=15g
-    # === 次级高价材料 =====
-    ("Red Ruby", "epic", 0.20),                # ~360g, 5%费=18g
-    ("Froststone Ore", "rare", 0.30),          # ~160g, 5%费=8g（低价，需厚利才做）
+    # === 顶级高价材料 ===
+    ("Troll Pelt", "epic", 0.15),              # 真实 epic，单价~5800g
+    ("Troll's Blood", "epic", 0.15),           # 真实 epic，单价~2700g
+    ("Obsidian Ore", "epic", 0.15),            # 真实 epic，单价~480g
+    ("Rubysilver Ore", "epic", 0.15),          # 真实 epic，单价~400g
+    ("Gold Ore", "epic", 0.20),                # 真实 epic，单价~320g
+    
+    # === 高价值宝石（Royal 档，真实 epic）===
+    ("Diamond (Royal)", "epic", 0.20),         # 真实 epic，单价~315g
+    ("Ruby (Royal)", "epic", 0.20),            # 真实 epic，单价~300g+
+    ("Sapphire (Royal)", "epic", 0.20),        # 真实 epic，单价~300g+
+    
+    # === 临界物品（需厚利才做）===
+    ("Diamond (Perfect)", "epic", 0.25),       # 真实 epic，单价~210g
 ]
-
 # ===== 信号阈值 =====
 BUY_T = -15          # 低于7日均价15%视为买入信号
 SELL_T = 20          # 高于7日均价20%视为卖出信号
