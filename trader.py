@@ -26,30 +26,24 @@ DARKERDB_KEYS = [k.strip() for k in _raw_keys.split(",") if k.strip()]
 OPENROUTER_KEY = os.environ.get("OPENROUTER_KEY", "")
 SERVERCHAN_SENDKEY = os.environ.get("SERVERCHAN_SENDKEY", "")
 
-# ===== 追踪的高价厚利物品清单（方案A：移除所有 Perfect 档 + 新增厚利商品）=====
+
+# ===== 追踪的高价厚利物品清单（已核实有市场样本）=====
 # 格式：(物品名, 品质, 最低利润门槛%)
 WATCHLIST = [
-    # === 顶级厚利（5%费 >> 15金最低费）===
-    ("Troll Pelt", "epic", 0.12),              # ~5800g, 5%费=290g
-    ("Troll's Blood", "epic", 0.12),           # ~2700g, 5%费=135g
-    ("Ruby (Royal)", "legendary", 0.15),       # ~1650g, 5%费=82.5g
-    ("Blue Sapphire (Royal)", "legendary", 0.15),  # ~1200g, 5%费=60g
-
-    # === 高价矿石/材料 ===
-    ("Obsidian Ore", "epic", 0.15),            # ~480g, 5%费=24g
-    ("Rubysilver Ore", "epic", 0.15),          # ~400g, 5%费=20g
-    ("Gold Ore", "epic", 0.20),                # ~320g, 5%费=16g（临界）
-    ("Silver Ore", "epic", 0.18),              # 制作材料，需求稳
-    ("Silver Ingot", "epic", 0.18),            # 制作材料，需求稳
-
-    # === 次级厚利 ===
-    ("Cobalt Ingot", "epic", 0.20),            # 制作蓝装核心材料
-    ("Tidestone Ore", "epic", 0.20),           # DarkerDB 数据库存在
-
-    # === 临界物品（门槛提高）===
-    ("Diamond (Royal)", "epic", 0.25),         # ~310g, 5%费=15.5g，需厚利
+    # === 顶级厚利 ===
+    ("Troll Pelt", "epic", 0.12),              # 5%费=290g
+    ("Troll's Blood", "epic", 0.12),           # 5%费=135g
+    
+    # === 传奇宝石（5%费真正生效）===
+    ("Ruby (Royal)", "legendary", 0.15),       # 5%费=82.5g
+    ("Blue Sapphire (Royal)", "legendary", 0.15),  # 5%费=60g
+    ("Diamond (Royal)", "legendary", 0.20),    # 5%费=15.5g（临界，门槛提高）
+    
+    # === 高价矿石 ===
+    ("Obsidian Ore", "epic", 0.15),            # 5%费=24g
+    ("Rubysilver Ore", "epic", 0.15),          # 5%费=20g
+    ("Gold Ore", "epic", 0.20),                # 5%费=16g（临界）
 ]
-
 # ===== 信号阈值 =====
 BUY_T = -15          # 低于7日均价15%视为买入信号
 SELL_T = 20          # 高于7日均价20%视为卖出信号
