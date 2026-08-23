@@ -3,9 +3,9 @@ DarkerDB AI Trader - 云端版（Server酱推送）
 - 双账号自动轮转
 - 按时间戳记录价格，支持昼夜规律分析
 - 每2小时运行一次
-- 高价物品专项监控（≥300金，5%挂牌费生效）
+- 方案A：仅监控单价≥300金、5%挂牌费真正生效的厚利物品
 - AI 安全过滤规避 + 稳定免费模型回退
-- 利润门槛过滤：预估利润 < 20% 不报 BUY
+- 利润门槛过滤：预估利润 < 物品最低门槛% 不报 BUY
 """
 import os
 import json
@@ -26,33 +26,37 @@ DARKERDB_KEYS = [k.strip() for k in _raw_keys.split(",") if k.strip()]
 OPENROUTER_KEY = os.environ.get("OPENROUTER_KEY", "")
 SERVERCHAN_SENDKEY = os.environ.get("SERVERCHAN_SENDKEY", "")
 
-# ===== 追踪的高价物品清单（已核实，均为真实存在的 epic 物品）=====
+# ===== 追踪的高价厚利物品清单（方案A：移除所有 Perfect 档 + 新增厚利商品）=====
 # 格式：(物品名, 品质, 最低利润门槛%)
 WATCHLIST = [
-    # === 顶级高价材料 ===
-    ("Troll Pelt", "epic", 0.15),              # 真实 epic，单价~5800g
-    ("Troll's Blood", "epic", 0.15),           # 真实 epic，单价~2700g
-    ("Obsidian Ore", "epic", 0.15),            # 真实 epic，单价~480g
-    ("Rubysilver Ore", "epic", 0.15),          # 真实 epic，单价~400g
-    ("Gold Ore", "epic", 0.20),                # 真实 epic，单价~320g
-    
-    # === 高价值宝石（Royal 档，真实 epic）===
-    ("Diamond (Royal)", "epic", 0.20),         # 真实 epic，单价~315g
-    ("Ruby (Royal)", "epic", 0.20),            # 真实 epic，单价~300g+
-    ("Sapphire (Royal)", "epic", 0.20),        # 真实 epic，单价~300g+
-    
-    # === 临界物品（需厚利才做）===
-    ("Diamond (Perfect)", "epic", 0.25),       # 真实 epic，单价~210g
+    # === 顶级厚利（5%费 >> 15金最低费）===
+    ("Troll Pelt", "epic", 0.12),              # ~5800g, 5%费=290g
+    ("Troll's Blood", "epic", 0.12),           # ~2700g, 5%费=135g
+    ("Ruby (Royal)", "legendary", 0.15),       # ~1650g, 5%费=82.5g
+    ("Blue Sapphire (Royal)", "legendary", 0.15),  # ~1200g, 5%费=60g
+
+    # === 高价矿石/材料 ===
+    ("Obsidian Ore", "epic", 0.15),            # ~480g, 5%费=24g
+    ("Rubysilver Ore", "epic", 0.15),          # ~400g, 5%费=20g
+    ("Gold Ore", "epic", 0.20),                # ~320g, 5%费=16g（临界）
+    ("Silver Ore", "epic", 0.18),              # 制作材料，需求稳
+    ("Silver Ingot", "epic", 0.18),            # 制作材料，需求稳
+
+    # === 次级厚利 ===
+    ("Cobalt Ingot", "epic", 0.20),            # 制作蓝装核心材料
+    ("Tidestone Ore", "epic", 0.20),           # DarkerDB 数据库存在
+
+    # === 临界物品（门槛提高）===
+    ("Diamond (Royal)", "epic", 0.25),         # ~310g, 5%费=15.5g，需厚利
 ]
+
 # ===== 信号阈值 =====
 BUY_T = -15          # 低于7日均价15%视为买入信号
 SELL_T = 20          # 高于7日均价20%视为卖出信号
-MIN_PROFIT_MARGIN = 0.20   # 最小利润门槛 20%（覆盖挂牌费后）
 LISTING_WINDOW_HOURS = 6
 SALE_WINDOW_HOURS = 24
 MIN_SAMPLES = 1
 HISTORY_FILE = "price_memory.json"
-ACCOUNT_STATE_FILE = "account_state_file"  # 修正变量名
 ACCOUNT_STATE_FILE = "account_state.json"
 DATA_RETENTION_DAYS = 7
 DEBUG = True
@@ -283,7 +287,7 @@ def add_memory(mem, key, timestamp, price):
     for k in old:
         del prices[k]
 
-# ===== AI 分析（中文输出）=====
+# ===== AI 分析（中文输出 + 挂牌费规则）=====
 
 def _try_fix_json(text):
     if text.count('"') % 2 != 0:
@@ -351,9 +355,12 @@ def analyze_with_ai(current_data, memory_context):
   "summary": "1-2句中文总结"
 }}
 3. 必须为当前价格数据中的每一个物品都输出一条分析，不能遗漏。
-4. signal 判断规则：
-   - 预估利润空间 >= 该物品的 min_profit_margin 且 偏离% < -15 → BUY
-   - 偏离% > 20 → SELL
+4. signal 判断规则（严格遵守 Marketplace 经济学）：
+   - 挂牌费 = 售价的 5% 或 15金取高
+   - 物品单价 ≤ 300金 时，15金最低费会吃掉利润，此类物品不应给出 BUY 信号
+   - 物品单价 300-500金 时，5%费仅 15-25金，要求 偏离% ≤ -20% 且 预估利润 ≥ 20% 才 BUY
+   - 物品单价 > 500金 时，5%费真正生效，偏离% ≤ -15% 且 预估利润 ≥ 15% 即可 BUY
+   - 偏离% > 20% → SELL
    - 其他 → HOLD
 5. 所有文本内容使用中文。
 6. 保持输出简洁，避免被截断。"""
@@ -430,7 +437,7 @@ def format_report(analysis_text):
     analyses = data.get("analyses", [])
     if not analyses:
         return None
-    lines = [f"📊 **DarkerDB 高价物品分析报告** | {datetime.now().strftime('%Y-%m-%d %H:%M')}", "=" * 76]
+    lines = [f"📊 **DarkerDB 厚利物品分析报告** | {datetime.now().strftime('%Y-%m-%d %H:%M')}", "=" * 78]
     sc = {"BUY": 0, "SELL": 0, "HOLD": 0}
     # BUY 信号排前面
     analyses.sort(key=lambda x: (x.get("signal", "HOLD") != "BUY", x.get("signal", "HOLD") != "SELL"))
@@ -447,13 +454,12 @@ def format_report(analysis_text):
             f"   ⚠️ 风险: {a.get('risk', '?')}"
         ]
     if data.get("summary"):
-        lines += ["\n" + "=" * 61, f"📋 **总结**: {data['summary']}"]
-    lines += ["\n" + "=" * 47, f"📊 信号: 🟢BUY {sc['BUY']} | 🔴SELL {sc['SELL']} | ⚪HOLD {sc['HOLD']}"]
+        lines += ["\n" + "=" * 63, f"📋 **总结**: {data['summary']}"]
+    lines += ["\n" + "=" * 48, f"📊 信号: 🟢BUY {sc['BUY']} | 🔴SELL {sc['SELL']} | ⚪HOLD {sc['HOLD']}"]
     return "\n".join(lines)
 
 def build_basic_report(current_data, fallback_used, skipped):
-    lines = [f"📊 高价物品价格报告 | {datetime.now().strftime('%Y-%m-%d %H:%M')}"]
-    # 按信号排序：BUY > SELL > HOLD
+    lines = [f"📊 厚利物品价格报告 | {datetime.now().strftime('%Y-%m-%d %H:%M')}"]
     order = {"BUY": 0, "SELL": 1, "HOLD": 2}
     current_data.sort(key=lambda x: order.get(x["signal"], 3))
     for e in current_data:
@@ -469,7 +475,7 @@ def build_basic_report(current_data, fallback_used, skipped):
 # ===== 主流程 =====
 
 def main():
-    print("🚀 DarkerDB AI Trader 启动（高价物品版）...")
+    print("🚀 DarkerDB AI Trader 启动（方案A：厚利物品版）...")
     print(f"📋 已配置 {len(DARKERDB_KEYS)} 个 DarkerDB 账号")
     current_idx = load_account_state()
     print(f"🔑 本次优先使用账号 #{current_idx + 1}")
@@ -479,6 +485,28 @@ def main():
     print(f"⏰ 当前时间戳: {timestamp_str}")
 
     mem = load_memory()
+
+    # ===== 清理方案A之前的不准确记忆（一次性）=====
+    bad_keys = [
+        "Bone|epic", "Iron Ore|epic", "Coal|epic",
+        "Red Ruby|epic", "Froststone Ore|rare",
+        "Emerald (Perfect)|epic", "Diamond (Perfect)|epic",
+        "Ruby (Perfect)|epic", "Sapphire (Perfect)|epic",
+        "__exact_id__Bone|epic", "__arch_id__Bone",
+        "__exact_id__Iron Ore|epic", "__arch_id__Iron Ore",
+        "__exact_id__Coal|epic", "__arch_id__Coal",
+        "__exact_id__Red Ruby|epic", "__arch_id__Red Ruby",
+        "__exact_id__Froststone Ore|rare", "__arch_id__Froststone Ore",
+        "__exact_id__Emerald (Perfect)|epic", "__arch_id__Emerald (Perfect)",
+        "__exact_id__Diamond (Perfect)|epic", "__arch_id__Diamond (Perfect)",
+        "__exact_id__Ruby (Perfect)|epic", "__arch_id__Ruby (Perfect)",
+        "__exact_id__Sapphire (Perfect)|epic", "__arch_id__Sapphire (Perfect)",
+    ]
+    for k in bad_keys:
+        if k in mem:
+            del mem[k]
+            print(f"  🧹 清理旧记忆: {k}")
+
     print("🔍 查询市场价格...")
     current_data, skipped, fallback_used = [], [], []
 
@@ -593,8 +621,8 @@ def main():
 
     save_memory(mem)
     print("📤 推送...")
-    push_to_serverchan(f"📊 DarkerDB 高价物品分析 | {datetime.now().strftime('%m-%d %H:%M')}", report)
-    print("\n" + "=" * 80)
+    push_to_serverchan(f"📊 DarkerDB 厚利物品分析 | {datetime.now().strftime('%m-%d %H:%M')}", report)
+    print("\n" + "=" * 84)
     print(report[:2000])
     print(f"\n✅ 完成！有数据:{len(current_data)} 跳过:{len(skipped)} 兜底:{len(fallback_used)}")
 
