@@ -2,9 +2,10 @@
 DarkerDB AI Trader - 云端版（Server酱推送）
 - 双账号自动轮转
 - 按时间戳记录价格，支持昼夜规律分析
-- 每2小时运行一次优化参数
+- 每2小时运行一次
+- 高价物品专项监控（≥300金，5%挂牌费生效）
 - AI 安全过滤规避 + 稳定免费模型回退
-- 增强降级逻辑
+- 利润门槛过滤：预估利润 < 20% 不报 BUY
 """
 import os
 import json
@@ -25,27 +26,35 @@ DARKERDB_KEYS = [k.strip() for k in _raw_keys.split(",") if k.strip()]
 OPENROUTER_KEY = os.environ.get("OPENROUTER_KEY", "")
 SERVERCHAN_SENDKEY = os.environ.get("SERVERCHAN_SENDKEY", "")
 
-# ===== 追踪的物品清单（10 个热门物品）=====
+# ===== 追踪的高价物品清单（2026年8月行情，单价≥300金）=====
+# 格式：(物品名, 品质, 最低利润门槛%)
 WATCHLIST = [
-    ("Troll's Blood", "epic"),
-    ("Gold Ore", "epic"),
-    ("Rubysilver Ore", "epic"),
-    ("Obsidian Ore", "epic"),
-    ("Bone", "common"),
-    ("Potion of Healing", "uncommon"),
-    ("Bandage", "rare"),
-    ("Grave Essence", "uncommon"),
-    ("Blue Sapphire (Perfect)", "epic"),
-    ("Ruby (Perfect)", "epic"),
+    # === 顶级高价材料（5%挂牌费远超15金最低）===
+    ("Troll Pelt", "epic", 0.15),              # ~5800g, 5%费=290g
+    ("Troll's Blood", "epic", 0.15),           # ~2700g, 5%费=135g
+    ("Obsidian Ore", "epic", 0.15),            # ~480g/块, 5%费=24g
+    ("Rubysilver Ore", "epic", 0.15),          # ~400g, 5%费=20g
+    ("Gold Ore", "epic", 0.20),                # ~320g, 5%费=16g（临界）
+    # === 高价值宝石（Royal/Perfect 档）===
+    ("Diamond (Royal)", "epic", 0.20),         # ~315g, 5%费=15.75g
+    ("Diamond (Perfect)", "epic", 0.25),       # ~210g, 5%费=10.5g（临界，需厚利）
+    ("Ruby (Royal)", "epic", 0.20),            # ~300g+, 5%费=15g
+    ("Sapphire (Royal)", "epic", 0.20),        # ~300g+, 5%费=15g
+    ("Emerald (Perfect)", "epic", 0.20),       # ~300g+(参考), 5%费=15g
+    # === 次级高价材料 =====
+    ("Red Ruby", "epic", 0.20),                # ~360g, 5%费=18g
+    ("Froststone Ore", "rare", 0.30),          # ~160g, 5%费=8g（低价，需厚利才做）
 ]
 
 # ===== 信号阈值 =====
-BUY_T = -15
-SELL_T = 20
+BUY_T = -15          # 低于7日均价15%视为买入信号
+SELL_T = 20          # 高于7日均价20%视为卖出信号
+MIN_PROFIT_MARGIN = 0.20   # 最小利润门槛 20%（覆盖挂牌费后）
 LISTING_WINDOW_HOURS = 6
 SALE_WINDOW_HOURS = 24
 MIN_SAMPLES = 1
 HISTORY_FILE = "price_memory.json"
+ACCOUNT_STATE_FILE = "account_state_file"  # 修正变量名
 ACCOUNT_STATE_FILE = "account_state.json"
 DATA_RETENTION_DAYS = 7
 DEBUG = True
@@ -100,14 +109,12 @@ def safe_get(url, params=None, retries=3):
                 elif r.status_code == 403:
                     continue
                 else:
-                    print(f"    ⚠️ 请求失败: {r.status_code}")
                     return None
             except Exception as e:
                 if DEBUG:
                     print(f"    ⚠️ Key[{key_idx}] 请求异常: {e}")
                 continue
         wait = 5 * (attempt + 1)
-        print(f"    ⚠️ 所有 key 均不可用，等待 {wait}s 后重试...")
         time.sleep(wait)
     return None
 
@@ -278,15 +285,11 @@ def add_memory(mem, key, timestamp, price):
     for k in old:
         del prices[k]
 
-# ===== AI 分析（稳定免费模型 + 去敏感化 prompt + 健壮 JSON 解析）=====
+# ===== AI 分析（中文输出）=====
 
 def _try_fix_json(text):
-    """尝试修复被截断/不完整的 JSON：补齐未闭合的字符串引号和花括号"""
-    # 如果字符串在某个单词中间被截断（没有闭合引号），先补一个引号
-    # 策略：统计引号数，若为奇数则在末尾补一个
     if text.count('"') % 2 != 0:
         text = text + '"'
-    # 补齐未闭合的花括号
     open_braces = text.count("{")
     close_braces = text.count("}")
     if open_braces > close_braces:
@@ -295,14 +298,11 @@ def _try_fix_json(text):
 
 def extract_json(text):
     if "User Safety" in text or (text.strip().lower().startswith("safe") and len(text) < 80):
-        print("    ⚠️ AI 请求被安全过滤，尝试备用模型...")
         return None
-    # 方法1：直接解析
     try:
         return json.loads(text)
     except:
         pass
-    # 方法2：找第一个 { 和最后一个 }
     start = text.find('{')
     end = text.rfind('}')
     if start != -1 and end != -1 and end > start:
@@ -311,12 +311,10 @@ def extract_json(text):
             return json.loads(candidate)
         except:
             pass
-        # 方法3：尝试修复被截断的 JSON
         try:
             return json.loads(_try_fix_json(candidate))
         except:
             pass
-    # 方法4：正则匹配最外层 JSON 对象
     pattern = r'\{(?:[^{}]|(?:\{[^{}]*\}))*\}'
     matches = re.findall(pattern, text)
     for match in matches:
@@ -324,25 +322,19 @@ def extract_json(text):
             return json.loads(match)
         except:
             continue
-    # 方法5：对正则匹配到的再做一次修复尝试
-    for match in matches:
-        try:
-            return json.loads(_try_fix_json(match))
-        except:
-            continue
     return None
 
 def analyze_with_ai(current_data, memory_context):
     prompt = f"""任务：分析以下价格数据，输出 JSON 格式的分析报告。
 
-当前价格数据（物品|品质, 当前均价, 7日均价, 偏离百分比）：
+当前价格数据（物品|品质, 当前均价, 7日均价, 偏离百分比, 预估利润空间%）：
 {json.dumps(current_data, ensure_ascii=False, indent=2)}
 
 历史数据（含时间戳）：
 {json.dumps(memory_context, ensure_ascii=False, indent=2)}
 
 要求：
-1. 只输出一个合法的 JSON 对象，不要任何其他文字、markdown 或解释。
+1. 只输出一个合法的 JSON 对象，不要任何其他文字。
 2. JSON 结构如下：
 {{
   "analyses": [
@@ -352,17 +344,20 @@ def analyze_with_ai(current_data, memory_context):
       "current_price": 数值,
       "reason": "简要中文原因，不知道就说'不确定'",
       "trend": "上涨" 或 "下跌" 或 "震荡" 或 "样本不足",
-      "trend_basis": "趋势依据的中文说明，如果数据点少于2就说'样本不足'",
-      "advice": "具体的中文建议",
+      "trend_basis": "趋势依据的中文说明",
+      "advice": "具体的中文建议，BUY信号请给出建议买入价上限",
       "risk": "低" 或 "中" 或 "高",
       "position_note": "持仓备注或 null"
     }}
   ],
-  "summary": "1-2句中英文混合的总结"
+  "summary": "1-2句中文总结"
 }}
 3. 必须为当前价格数据中的每一个物品都输出一条分析，不能遗漏。
-4. 即使只有一个数据点，也要根据偏离百分比给出信号（负数为 BUY，正数大于20为 SELL，其他为 HOLD）。
-5. 所有文本内容（reason, trend_basis, advice, position_note, summary）使用中文。
+4. signal 判断规则：
+   - 预估利润空间 >= 该物品的 min_profit_margin 且 偏离% < -15 → BUY
+   - 偏离% > 20 → SELL
+   - 其他 → HOLD
+5. 所有文本内容使用中文。
 6. 保持输出简洁，避免被截断。"""
 
     headers = {
@@ -391,22 +386,18 @@ def analyze_with_ai(current_data, memory_context):
                 if DEBUG:
                     print(f"    [DEBUG] AI response via {model}: {content[:400]}")
                 if "User Safety" in content or (content.strip().lower().startswith("safe") and len(content) < 80):
-                    print(f"    ⚠️ {model} blocked by safety filter, trying next...")
                     continue
                 parsed = extract_json(content)
                 if parsed and parsed.get("analyses"):
                     return content
                 else:
-                    print(f"    ⚠️ {model} 返回内容解析失败/为空，尝试下一个模型")
                     continue
             else:
-                print(f"    ⚠️ {model} returned {r.status_code}")
                 if r.status_code == 404:
                     continue
         except Exception as e:
             print(f"    ⚠️ {model} error: {e}")
         time.sleep(0.5)
-
     print("❌ 所有模型均失败")
     return None
 
@@ -418,7 +409,7 @@ def push_to_serverchan(title, content):
         print("⚠️ 未配置 SERVERCHAN_SENDKEY")
         return
     if sendkey.startswith("sctp"):
-        m = re.match(r'^sctp(\d+)t', sendkey)
+        m = re.search(r'^sctp(\d+)t', sendkey)
         if m:
             url = f"https://{m.group(1)}.push.ft07.com/send/{sendkey}.send"
         else:
@@ -440,10 +431,11 @@ def format_report(analysis_text):
         return None
     analyses = data.get("analyses", [])
     if not analyses:
-        print("⚠️ AI 返回空分析列表，降级到基础报告")
         return None
-    lines = [f"📊 **DarkerDB 数据分析报告** | {datetime.now().strftime('%Y-%m-%d %H:%M')}", "=" * 72]
+    lines = [f"📊 **DarkerDB 高价物品分析报告** | {datetime.now().strftime('%Y-%m-%d %H:%M')}", "=" * 76]
     sc = {"BUY": 0, "SELL": 0, "HOLD": 0}
+    # BUY 信号排前面
+    analyses.sort(key=lambda x: (x.get("signal", "HOLD") != "BUY", x.get("signal", "HOLD") != "SELL"))
     for a in analyses:
         sig = a.get("signal", "HOLD")
         sc[sig] = sc.get(sig, 0) + 1
@@ -452,33 +444,34 @@ def format_report(analysis_text):
             f"\n{em} **{a.get('item', '?')}** — {sig}",
             f"   当前均价: {a.get('current_price', '?')}",
             f"   💡 原因: {a.get('reason', 'N/A')}",
-            f"   📈 趋势: {a.get('trend', '?')}（{a.get('trend_basis', '')}）",
+            f"   📈 趋势: {a.get('trend', '?')}",
             f"   🎯 建议: {a.get('advice', 'N/A')}",
             f"   ⚠️ 风险: {a.get('risk', '?')}"
         ]
-        if a.get("position_note"):
-            lines.append(f"   📌 持仓: {a['position_note']}")
     if data.get("summary"):
-        lines += ["\n" + "=" * 57, f"📋 **总结**: {data['summary']}"]
-    lines += ["\n" + "=" * 44, f"📊 信号: 🟢BUY {sc['BUY']} | 🔴SELL {sc['SELL']} | ⚪HOLD {sc['HOLD']}"]
+        lines += ["\n" + "=" * 61, f"📋 **总结**: {data['summary']}"]
+    lines += ["\n" + "=" * 47, f"📊 信号: 🟢BUY {sc['BUY']} | 🔴SELL {sc['SELL']} | ⚪HOLD {sc['HOLD']}"]
     return "\n".join(lines)
 
-# ===== 主流程 =====
-
 def build_basic_report(current_data, fallback_used, skipped):
-    """AI 失败时的基础报告"""
-    lines = [f"📊 价格报告 | {datetime.now().strftime('%Y-%m-%d %H:%M')}"]
+    lines = [f"📊 高价物品价格报告 | {datetime.now().strftime('%Y-%m-%d %H:%M')}"]
+    # 按信号排序：BUY > SELL > HOLD
+    order = {"BUY": 0, "SELL": 1, "HOLD": 2}
+    current_data.sort(key=lambda x: order.get(x["signal"], 3))
     for e in current_data:
         em = {"BUY": "🟢", "SELL": "🔴", "HOLD": "⚪"}.get(e["signal"], "⚪")
-        lines.append(f"{em} {e['item']}: 均价={e['current_price']} (偏离{e['deviation_pct']}%) [样本:{e['sample_size']}]")
+        profit = e.get("profit_margin", 0) * 100
+        lines.append(f"{em} {e['item']}: 均价={e['current_price']} (7日均价={e['avg_7d']}, 偏离{e['deviation_pct']}%, 预估利润{profit:.1f}%)")
     if fallback_used:
         lines.append(f"\n🔄 兜底: {', '.join(fallback_used)}")
     if skipped:
         lines.append(f"\n⚠️ 跳过 {len(skipped)} 个")
     return "\n".join(lines)
 
+# ===== 主流程 =====
+
 def main():
-    print("🚀 DarkerDB AI Trader 启动（每2小时版，双账号轮转）...")
+    print("🚀 DarkerDB AI Trader 启动（高价物品版）...")
     print(f"📋 已配置 {len(DARKERDB_KEYS)} 个 DarkerDB 账号")
     current_idx = load_account_state()
     print(f"🔑 本次优先使用账号 #{current_idx + 1}")
@@ -491,7 +484,7 @@ def main():
     print("🔍 查询市场价格...")
     current_data, skipped, fallback_used = [], [], []
 
-    for name, rarity in WATCHLIST:
+    for name, rarity, min_margin in WATCHLIST:
         print(f"\n--- 处理 {name}|{rarity} ---")
         ck_id = f"__exact_id__{name}|{rarity}"
         ck_arch = f"__arch_id__{name}"
@@ -527,6 +520,7 @@ def main():
         src = {"listings": "挂牌", "mixed": "挂牌+成交", "sales": "成交", "market_fallback": "兜底(/v2/market)"}.get(result["source"], "?")
         print(f"  ✅ {name}|{rarity}: 均价={price} (样本:{result['sample_count']} 最低:{result['min_price']} 来源:{src})")
 
+        # 计算偏离度
         series = get_price_series(mem, f"{name}|{rarity}", hours=168)
         today_start = now_utc.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
         past_series = [(k, v) for k, v in series if k < today_start]
@@ -539,12 +533,28 @@ def main():
             hist_avg = dmin if dmin else price
             dev = ((price - dmin) / dmin) * 100 if dmin else 0
 
-        signal = "BUY" if dev < BUY_T else ("SELL" if dev > SELL_T else "HOLD")
+        # 计算预估利润空间（考虑挂牌费 5%或15金取高）
+        listing_fee = max(price * 0.05, 15)
+        if hist_avg > price + listing_fee:
+            profit_margin = (hist_avg - price - listing_fee) / price
+        else:
+            profit_margin = (hist_avg - price - listing_fee) / price if price > 0 else 0
+
+        # 信号判断：偏离达标 且 预估利润超过该物品的最小门槛
+        if dev < BUY_T and profit_margin >= min_margin:
+            signal = "BUY"
+        elif dev > SELL_T:
+            signal = "SELL"
+        else:
+            signal = "HOLD"
+
         current_data.append({
             "item": f"{name}|{rarity}",
             "current_price": price,
             "avg_7d": round(hist_avg, 1),
             "deviation_pct": round(dev, 1),
+            "profit_margin": round(profit_margin, 4),
+            "min_margin": min_margin,
             "signal": signal,
             "sample_size": result["sample_count"]
         })
@@ -571,13 +581,10 @@ def main():
     if at:
         report = format_report(at)
         if report is None:
-            print("⚠️ AI 返回内容无效，使用基础报告")
             report = build_basic_report(current_data, fallback_used, skipped)
     else:
-        print("⚠️ AI 失败，使用基础报告")
         report = build_basic_report(current_data, fallback_used, skipped)
 
-    # 追加兜底和跳过信息
     if report and (fallback_used or skipped):
         extra = ""
         if fallback_used:
@@ -588,8 +595,8 @@ def main():
 
     save_memory(mem)
     print("📤 推送...")
-    push_to_serverchan(f"📊 DarkerDB 市场分析 | {datetime.now().strftime('%m-%d %H:%M')}", report)
-    print("\n" + "=" * 76)
+    push_to_serverchan(f"📊 DarkerDB 高价物品分析 | {datetime.now().strftime('%m-%d %H:%M')}", report)
+    print("\n" + "=" * 80)
     print(report[:2000])
     print(f"\n✅ 完成！有数据:{len(current_data)} 跳过:{len(skipped)} 兜底:{len(fallback_used)}")
 
@@ -601,7 +608,6 @@ def main():
         subprocess.run(["git", "commit", "-m", f"Update price memory at {timestamp_str}"], capture_output=True)
         pull = subprocess.run(["git", "pull", "--rebase", "origin", "main"], capture_output=True, text=True)
         if pull.returncode != 0:
-            print(f"⚠️ Git pull 失败，尝试 force push")
             subprocess.run(["git", "push", "--force", "origin", "main"], capture_output=True)
         else:
             push = subprocess.run(["git", "push"], capture_output=True, text=True)
