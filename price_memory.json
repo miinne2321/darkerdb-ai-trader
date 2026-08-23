@@ -32,7 +32,8 @@
       "2026-08-22T16:55:06Z": 2983.42,
       "2026-08-22T19:02:40Z": 3050.0,
       "2026-08-22T20:53:08Z": 3052.88,
-      "2026-08-22T22:51:19Z": 2976.57
+      "2026-08-22T22:51:19Z": 2976.57,
+      "2026-08-23T00:25:29Z": 2999.18
     }
   },
   "__id__Troll's Blood": "id.item.troll_blood",
@@ -51,7 +52,8 @@
       "2026-08-22T16:55:06Z": 304.17,
       "2026-08-22T19:02:40Z": 310.55,
       "2026-08-22T20:53:08Z": 310.92,
-      "2026-08-22T22:51:19Z": 313.83
+      "2026-08-22T22:51:19Z": 313.83,
+      "2026-08-23T00:25:29Z": 297.83
     }
   },
   "__id__Gold Ore": "id.item.gold_ores",
@@ -70,7 +72,8 @@
       "2026-08-22T16:55:06Z": 376.55,
       "2026-08-22T19:02:40Z": 366.67,
       "2026-08-22T20:53:08Z": 358.75,
-      "2026-08-22T22:51:19Z": 331.56
+      "2026-08-22T22:51:19Z": 331.56,
+      "2026-08-23T00:25:29Z": 365.67
     }
   },
   "__id__Rubysilver Ore": "id.item.rubysilver_ores",
@@ -89,7 +92,8 @@
       "2026-08-22T16:55:06Z": 1098.9,
       "2026-08-22T19:02:40Z": 2028.0,
       "2026-08-22T20:53:08Z": 2076.8,
-      "2026-08-22T22:51:19Z": 366.3
+      "2026-08-22T22:51:19Z": 366.3,
+      "2026-08-23T00:25:29Z": 660.0
     }
   },
   "__id__Obsidian Ore": "id.item.obsidian_ores",
@@ -610,5 +614,49 @@
   "__arch_id__Ruby (Perfect)": "id.item.ruby",
   "__exact_id__Ruby (Perfect)|epic": "id.item.ruby_5001",
   "__arch_id__Obsidian Ore": "id.item.obsidian_ores",
-  "__exact_id__Obsidian Ore|epic": "id.item.obsidian_ores"
+  "__exact_id__Obsidian Ore|epic": "id.item.obsidian_ores",
+  "__arch_id__Troll Pelt": "id.item.troll_pelt",
+  "__exact_id__Troll Pelt|epic": "id.item.troll_pelt",
+  "Troll Pelt|epic": {
+    "prices": {
+      "2026-08-23T00:25:29Z": 3996.38
+    }
+  },
+  "__arch_id__Diamond (Royal)": "id.item.diamond",
+  "__exact_id__Diamond (Royal)|epic": "id.item.diamond",
+  "Diamond (Royal)|epic": {
+    "prices": {
+      "2026-08-23T00:25:29Z": 342.1
+    }
+  },
+  "__arch_id__Diamond (Perfect)": "id.item.diamond",
+  "__exact_id__Diamond (Perfect)|epic": "id.item.diamond",
+  "Diamond (Perfect)|epic": {
+    "prices": {
+      "2026-08-23T00:25:29Z": 342.1
+    }
+  },
+  "__arch_id__Ruby (Royal)": "id.item.ruby",
+  "__exact_id__Ruby (Royal)|epic": "id.item.ruby",
+  "Ruby (Royal)|epic": {
+    "prices": {
+      "2026-08-23T00:25:29Z": 330.0
+    }
+  },
+  "__arch_id__Sapphire (Royal)": "id.item.blue_sapphire",
+  "__exact_id__Sapphire (Royal)|epic": "id.item.blue_sapphire",
+  "Sapphire (Royal)|epic": {
+    "prices": {
+      "2026-08-23T00:25:29Z": 440.0
+    }
+  },
+  "__arch_id__Emerald (Perfect)": "id.item.emerald",
+  "__exact_id__Emerald (Perfect)|epic": "id.item.emerald",
+  "Emerald (Perfect)|epic": {
+    "prices": {
+      "2026-08-23T00:25:29Z": 64.9
+    }
+  },
+  "__arch_id__Froststone Ore": "id.item.frost_stone_ores",
+  "__exact_id__Froststone Ore|rare": "id.item.frost_stone_ores"
 }
