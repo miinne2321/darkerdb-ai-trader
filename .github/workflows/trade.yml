@@ -2,7 +2,7 @@ name: DarkerDB AI Trader
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '17 * * * *'
   workflow_dispatch:
 
 jobs:
