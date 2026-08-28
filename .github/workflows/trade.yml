@@ -5,7 +5,6 @@ on:
     - cron: '17 * * * *'  # 每小时第17分钟（UTC），避开整点和半点高峰
   workflow_dispatch:
 
-
 jobs:
   analyze:
     runs-on: ubuntu-latest
