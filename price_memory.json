@@ -1031,5 +1031,13 @@
       "2026-08-23T06:47:52Z": 440.0
     }
   },
-  "__exact_id__Diamond (Royal)|legendary": "id.item.diamond"
+  "__exact_id__Diamond (Royal)|legendary": "id.item.diamond",
+  "__exact_id__Troll Pelt|Epic": "id.item.troll_pelt",
+  "__exact_id__Troll's Blood|Epic": "id.item.troll_blood",
+  "__exact_id__Ruby (Royal)|Legendary": "id.item.ruby",
+  "__exact_id__Blue Sapphire (Royal)|Legendary": "id.item.blue_sapphire",
+  "__exact_id__Obsidian Ore|Epic": "id.item.obsidian_ores",
+  "__exact_id__Rubysilver Ore|Epic": "id.item.rubysilver_ores",
+  "__exact_id__Gold Ore|Epic": "id.item.gold_ores",
+  "__exact_id__Diamond (Royal)|Epic": "id.item.diamond"
 }
