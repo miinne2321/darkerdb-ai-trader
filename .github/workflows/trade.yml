@@ -2,8 +2,9 @@ name: DarkerDB AI Trader
 
 on:
   schedule:
-    - cron: '17 * * * *' # 每4小时运行一次（UTC时间，对应北京时间 8/12/16/20/0/4
-  workflow_dispatch:  # 允许手动触发
+    - cron: '17 * * * *'  # 每小时第17分钟（UTC），避开整点和半点高峰
+  workflow_dispatch:
+
 
 jobs:
   analyze:
