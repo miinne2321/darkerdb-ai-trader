@@ -1039,5 +1039,11 @@
   "__exact_id__Obsidian Ore|Epic": "id.item.obsidian_ores",
   "__exact_id__Rubysilver Ore|Epic": "id.item.rubysilver_ores",
   "__exact_id__Gold Ore|Epic": "id.item.gold_ores",
-  "__exact_id__Diamond (Royal)|Epic": "id.item.diamond"
+  "__exact_id__Diamond (Royal)|Epic": "id.item.diamond",
+  "__arch_id__Ruby": "id.item.ruby",
+  "__exact_id__Ruby|legendary": "id.item.ruby",
+  "__arch_id__Sapphire": "id.item.blue_sapphire",
+  "__exact_id__Sapphire|legendary": "id.item.blue_sapphire",
+  "__arch_id__Diamond": "id.item.diamond",
+  "__exact_id__Diamond|legendary": "id.item.diamond"
 }
