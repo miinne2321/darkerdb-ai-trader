@@ -57,7 +57,7 @@ WATCHLIST = [
     ("Ruby", "legendary", 0.15),
     ("Sapphire", "legendary", 0.15),
     ("Obsidian Ore", "epic", 0.15),
-    ("Rubysilver Ore", "epic", 0.15),   # ✅ 修正：Rubysilver（无 s）
+    ("Rubysilver Ore", "epic", 0.15),
     ("Gold Ore", "epic", 0.20),
     ("Diamond", "legendary", 0.20),
 ]
@@ -289,7 +289,6 @@ def get_fresh_price_checks(item_id, rarity):
         "source": source,
     }
 
-
 def get_price_from_market_fallback(archetype_id, rarity):
     """从 /v2/market 兜底取价（容错版）"""
     if not archetype_id:
@@ -346,7 +345,6 @@ def get_price_from_market_fallback(archetype_id, rarity):
         "source": "market_fallback",
     }
 
-
 def fetch_price(name, rarity):
     """完整流程：搜索拿真实 ID -> price-checks -> market 兜底"""
     archetype_id = resolve_archetype_id(name)
@@ -361,14 +359,12 @@ def fetch_price(name, rarity):
         used_fallback = True
     return result, archetype_id
 
-
 # ===== 多维指标 =====
 def calc_indicators(series, short_window=SHORT_WINDOW, long_window=LONG_WINDOW):
     if len(series) < short_window:
         return None
     prices = [p for _, p in series]
     if len(prices) < long_window:
-        # 样本不足以算长期均线，用短期均线近似
         sma_short = sum(prices[-short_window:]) / short_window
         sma_long = sma_short
     else:
@@ -409,7 +405,6 @@ def calc_indicators(series, short_window=SHORT_WINDOW, long_window=LONG_WINDOW):
         "is_golden_cross": sma_short > sma_long,
         "sample_size": len(prices),
     }
-
 
 def generate_signal(ind):
     if ind is None:
@@ -454,8 +449,6 @@ def generate_signal(ind):
     else:
         return "HOLD", abs(score), " + ".join(signals) if signals else "信号不明确"
 
-
-# ===== 旧版简单判断（冷启动/样本不足时降级使用）=====
 def simple_signal(price, hist_avg, min_margin):
     listing_fee = max(price * 0.05, 15)
     if hist_avg > price + listing_fee:
@@ -470,8 +463,7 @@ def simple_signal(price, hist_avg, min_margin):
     else:
         return "HOLD", profit_margin, f"偏离{dev:+.1f}%"
 
-
-# ===== memory 辅助（兼容旧 price_memory.json）=====
+# ===== memory 辅助 =====
 def load_memory():
     if os.path.exists("price_memory.json"):
         try:
@@ -482,7 +474,6 @@ def load_memory():
 
 def save_memory(mem):
     json.dump(mem, open("price_memory.json", "w", encoding="utf-8"), ensure_ascii=False, indent=2)
-
 
 # ===== AI 分析 =====
 def _try_fix_json(text):
@@ -566,7 +557,6 @@ def analyze_with_ai(current_data, memory_context):
         time.sleep(0.5)
     return None
 
-
 # ===== Server酱 推送 =====
 def push_to_serverchan(title, content):
     sendkey = SERVERCHAN_SENDKEY
@@ -589,7 +579,6 @@ def push_to_serverchan(title, content):
         print("✅ 已推送到微信" if res.get("code") == 0 else f"⚠️ 推送失败: {res}")
     except Exception as e:
         print(f"⚠️ 推送异常: {e}")
-
 
 def format_report(analysis_text):
     data = extract_json(analysis_text)
@@ -618,7 +607,6 @@ def format_report(analysis_text):
     lines += ["\n" + "=" * 44, f"📊 信号: 🟢BUY {sc['BUY']} | 🔴SELL {sc['SELL']} | ⚪HOLD {sc['HOLD']}"]
     return "\n".join(lines)
 
-
 def build_basic_report(current_data, fallback_used, skipped):
     lines = [f"📊 长期价格报告 | {datetime.now().strftime('%Y-%m-%d %H:%M')} (窗口:{HISTORY_DAYS}天)"]
     order = {"BUY": 0, "SELL": 1, "HOLD": 2}
@@ -632,17 +620,12 @@ def build_basic_report(current_data, fallback_used, skipped):
         lines.append(f"\n⚠️ 跳过 {len(skipped)} 个: {', '.join(skipped)}")
     return "\n".join(lines)
 
-
 # ===== 【NEW】自动发现第二、三梯队物品 =====
 def discover_materials():
-    """
-    遍历关键词种子，调用 /v2/items 搜索，返回 [(name, rarity, item_id)]
-    按 (name, rarity) 去重，确保品质隔离
-    """
     discovered = {}  # key: (name, rarity) -> item_id
     print("\n🔍 自动发现第二、三梯队材料...")
     for kw in DISCOVERY_KEYWORDS:
-        time.sleep(0.3)  # 限流保护
+        time.sleep(0.3)
         r = safe_get(f"{API_BASE}/items", {"name": kw, "limit": 10})
         if not r or r.status_code != 200:
             continue
@@ -659,7 +642,6 @@ def discover_materials():
             rarity = item.get("rarity")
             item_id = item.get("id")
             item_type = item.get("item_type")
-            # 排除装备大类
             if item_type in {"Weapon", "Armor", "Accessory"}:
                 continue
             if name and rarity and item_id:
@@ -670,8 +652,6 @@ def discover_materials():
     result = [(name, rarity, item_id) for (name, rarity), item_id in discovered.items()]
     print(f"  📋 自动发现 {len(result)} 个新目标")
     return result
-# =============================================
-
 
 # ===== 主流程 =====
 def main():
@@ -690,34 +670,28 @@ def main():
 
     mem = load_memory()
 
-    # ===== 【NEW】合并自动发现的物品到 WATCHLIST =====
-    global WATCHLIST  # 允许修改全局变量（或在函数内重新赋值）
+    # 合并自动发现的物品到 WATCHLIST
+    global WATCHLIST
     existing_keys = {(name, rarity) for name, rarity, _ in WATCHLIST}
     new_items = discover_materials()
     for name, rarity, item_id in new_items:
         if (name, rarity) not in existing_keys:
-            # 默认佣金率 0.15，可根据物品类型调整（这里简单统一）
             WATCHLIST.append((name, rarity, 0.15))
             existing_keys.add((name, rarity))
-            # 将 item_id 缓存到 memory，避免后续重复搜索
             ck_id = f"__exact_id__{name}|{rarity}"
             mem[ck_id] = item_id
     save_memory(mem)
     print(f"📋 总监控目标: {len(WATCHLIST)} 个 (含自动发现)")
-    # =================================================
 
     current_data, skipped, fallback_used = [], [], []
 
     for name, rarity, min_margin in WATCHLIST:
         print(f"\n--- 处理 {name}|{rarity} ---")
-
-        # 先从 memory 读缓存的精确 ID
         ck_id = f"__exact_id__{name}|{rarity}"
         ck_arch = f"__arch_id__{name}"
         archetype_id = mem.get(ck_arch)
         item_id = mem.get(ck_id)
 
-        # 搜索拿真实 ID（优先精确匹配）
         if not archetype_id:
             archetype_id = resolve_archetype_id(name)
             if archetype_id:
@@ -728,12 +702,11 @@ def main():
         save_memory(mem)
 
         if not item_id:
-            print(f"  ❌ {name}: 无法解析 ID，请检查名称")
+            print(f"  ❌ {name}: 无法解析 ID")
             skipped.append(f"{name}|{rarity}: 无法解析 ID")
             continue
         print(f"  item_id: {item_id}")
 
-        # 查价格：price-checks -> market 兜底
         result = get_fresh_price_checks(item_id, rarity)
         used_fallback = False
         if not result:
@@ -750,10 +723,8 @@ def main():
         src = {"listings": "挂牌", "mixed": "挂牌+成交", "market_fallback": "兜底(/v2/market)"}.get(result["source"], "?")
         print(f"  ✅ {name}|{rarity}: 均价={price} (样本:{result['sample_count']} 最低:{result['min_price']} 来源:{src})")
 
-        # 写入长期数据库
         save_price_to_db(name, rarity, price, timestamp_str)
 
-        # 取出历史序列，计算多维信号
         series = get_price_series(name, rarity, days=HISTORY_DAYS)
         ind = calc_indicators(series)
         if ind:
@@ -767,7 +738,6 @@ def main():
             print(f"  📈 多维信号: {signal} (置信度{confidence:.0%}) - {reason}")
             print(f"     {trend_str}")
         else:
-            # 降级：简单偏离判断
             past = [p for _, p in series]
             hist_avg = sum(past) / len(past) if past else result["min_price"]
             signal, confidence, reason = simple_signal(price, hist_avg, min_margin)
@@ -793,7 +763,6 @@ def main():
             print(f"⚠️ 跳过 {len(skipped)} 个: {skipped}")
         return
 
-    # 构建 AI 上下文（最近 50 条历史）
     mc = {}
     for e in current_data:
         item_name = e["item"].split("|")[0]
@@ -831,4 +800,18 @@ def main():
     # Git 提交
     try:
         subprocess.run(["git", "config", "--global", "user.email", "action@github.com"], capture_output=True)
-        subprocess.run(["git", "config", "--global", "
+        subprocess.run(["git", "config", "--global", "user.name", "GitHub Action"], capture_output=True)
+        subprocess.run(["git", "add", DB_FILE, ACCOUNT_STATE_FILE, "price_memory.json"], capture_output=True)
+        subprocess.run(["git", "commit", "-m", f"Update long-term price data at {timestamp_str}"], capture_output=True)
+        pull = subprocess.run(["git", "pull", "--rebase", "origin", "main"], capture_output=True, text=True)
+        if pull.returncode != 0:
+            subprocess.run(["git", "push", "--force", "origin", "main"], capture_output=True)
+        else:
+            push = subprocess.run(["git", "push"], capture_output=True, text=True)
+            if push.returncode != 0:
+                subprocess.run(["git", "push", "--force", "origin", "main"], capture_output=True)
+    except Exception as e:
+        print(f"⚠️ Git 操作异常: {e}")
+
+if __name__ == "__main__":
+    main()
