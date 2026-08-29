@@ -1,5 +1,5 @@
 """
-DarkerDB AI Trader - 长期趋势版（完整修正版）
+DarkerDB AI Trader - 长期趋势版（完整修正版 + 自动发现第二三梯队）
 ============================================
 核心修正：
 1. 所有物品必须先经 resolve_archetype_id() 拿到真实 item_id，禁止自己拼
@@ -7,6 +7,7 @@ DarkerDB AI Trader - 长期趋势版（完整修正版）
 3. 名字标准化（Rubysilver Ore 等）
 4. 多维信号（趋势/斜率/位置/动量/波动率）+ SQLite 长期存储
 5. 依赖：requests + numpy（见 requirements.txt）
+6. 【新增】自动发现粉末、稀有炼金耗材等第二、三梯队物品，按品质隔离
 """
 import os
 import json
@@ -60,6 +61,22 @@ WATCHLIST = [
     ("Gold Ore", "epic", 0.20),
     ("Diamond", "legendary", 0.20),
 ]
+
+# === NEW: 自动发现关键词种子（第二、三梯队） ===
+DISCOVERY_KEYWORDS = [
+    # 粉末类
+    "Powder", "Brimstone", "Froststone", "Obsidian", "Tidestone", "Gold", "Rubysilver", "Cobalt",
+    # 稀有炼金耗材
+    "Troll Pelt", "Troll's Blood", "Demon Blood", "Volcanic Ash", "Frozen Heart",
+    "Wardweed", "Lifeleaf", "Saltvine", "Ghostdust", "Bone", "Intact Skull",
+    "Arcane Essence", "Magma Essence", "Jellyfish Glow Essence",
+    "Breath of the Deceased", "Broken War Horn",
+    # 皇家宝石（补充）
+    "Ruby (Royal)", "Blue Sapphire (Royal)", "Diamond (Royal)", "Diamond (Exquisite)",
+    # 金币容器（补充）
+    "Coin Bag", "Coin Pouch", "Coin Purse", "Coin Chest", "Spectral Coinbag",
+]
+# ================================================
 
 ACCOUNT_STATE_FILE = "account_state.json"
 
@@ -616,6 +633,46 @@ def build_basic_report(current_data, fallback_used, skipped):
     return "\n".join(lines)
 
 
+# ===== 【NEW】自动发现第二、三梯队物品 =====
+def discover_materials():
+    """
+    遍历关键词种子，调用 /v2/items 搜索，返回 [(name, rarity, item_id)]
+    按 (name, rarity) 去重，确保品质隔离
+    """
+    discovered = {}  # key: (name, rarity) -> item_id
+    print("\n🔍 自动发现第二、三梯队材料...")
+    for kw in DISCOVERY_KEYWORDS:
+        time.sleep(0.3)  # 限流保护
+        r = safe_get(f"{API_BASE}/items", {"name": kw, "limit": 10})
+        if not r or r.status_code != 200:
+            continue
+        data = r.json()
+        body = data.get("body")
+        if isinstance(body, list):
+            items = body
+        elif isinstance(body, dict):
+            items = body.get("results", [])
+        else:
+            items = []
+        for item in items:
+            name = item.get("name")
+            rarity = item.get("rarity")
+            item_id = item.get("id")
+            item_type = item.get("item_type")
+            # 排除装备大类
+            if item_type in {"Weapon", "Armor", "Accessory"}:
+                continue
+            if name and rarity and item_id:
+                key = (name, rarity)
+                if key not in discovered:
+                    discovered[key] = item_id
+                    print(f"  + 发现: {name}|{rarity} (ID: {item_id})")
+    result = [(name, rarity, item_id) for (name, rarity), item_id in discovered.items()]
+    print(f"  📋 自动发现 {len(result)} 个新目标")
+    return result
+# =============================================
+
+
 # ===== 主流程 =====
 def main():
     print(f"🚀 DarkerDB AI Trader 启动（长期趋势版，窗口={HISTORY_DAYS}天）...")
@@ -632,6 +689,23 @@ def main():
     print(f"⏰ 当前时间戳: {timestamp_str}")
 
     mem = load_memory()
+
+    # ===== 【NEW】合并自动发现的物品到 WATCHLIST =====
+    global WATCHLIST  # 允许修改全局变量（或在函数内重新赋值）
+    existing_keys = {(name, rarity) for name, rarity, _ in WATCHLIST}
+    new_items = discover_materials()
+    for name, rarity, item_id in new_items:
+        if (name, rarity) not in existing_keys:
+            # 默认佣金率 0.15，可根据物品类型调整（这里简单统一）
+            WATCHLIST.append((name, rarity, 0.15))
+            existing_keys.add((name, rarity))
+            # 将 item_id 缓存到 memory，避免后续重复搜索
+            ck_id = f"__exact_id__{name}|{rarity}"
+            mem[ck_id] = item_id
+    save_memory(mem)
+    print(f"📋 总监控目标: {len(WATCHLIST)} 个 (含自动发现)")
+    # =================================================
+
     current_data, skipped, fallback_used = [], [], []
 
     for name, rarity, min_margin in WATCHLIST:
@@ -757,19 +831,4 @@ def main():
     # Git 提交
     try:
         subprocess.run(["git", "config", "--global", "user.email", "action@github.com"], capture_output=True)
-        subprocess.run(["git", "config", "--global", "user.name", "GitHub Action"], capture_output=True)
-        subprocess.run(["git", "add", DB_FILE, ACCOUNT_STATE_FILE, "price_memory.json"], capture_output=True)
-        subprocess.run(["git", "commit", "-m", f"Update long-term price data at {timestamp_str}"], capture_output=True)
-        pull = subprocess.run(["git", "pull", "--rebase", "origin", "main"], capture_output=True, text=True)
-        if pull.returncode != 0:
-            subprocess.run(["git", "push", "--force", "origin", "main"], capture_output=True)
-        else:
-            push = subprocess.run(["git", "push"], capture_output=True, text=True)
-            if push.returncode != 0:
-                subprocess.run(["git", "push", "--force", "origin", "main"], capture_output=True)
-    except Exception as e:
-        print(f"⚠️ Git 操作异常: {e}")
-
-
-if __name__ == "__main__":
-    main()
+        subprocess.run(["git", "config", "--global", "
