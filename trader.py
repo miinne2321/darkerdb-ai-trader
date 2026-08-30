@@ -55,7 +55,6 @@ WATCHLIST = [
     ("Sapphire", "legendary", 0.15),
     ("Obsidian Ore", "epic", 0.15),
     ("Rubysilver Ore", "epic", 0.15),
-    ("Gold Ore", "epic", 0.20),
     ("Diamond", "legendary", 0.20),
 
     # ---- 第二梯队：高价值非装备（≥600）----
