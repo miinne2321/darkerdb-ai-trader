@@ -1,13 +1,14 @@
 """
-DarkerDB AI Trader - 长期趋势版（完整修正版 + 自动发现第二三梯队）
+DarkerDB AI Trader - 长期趋势版（最终定稿版）
 ============================================
-核心修正：
-1. 所有物品必须先经 resolve_archetype_id() 拿到真实 item_id，禁止自己拼
-2. /v2/market 兜底函数容错 + DEBUG 日志，不再静默失败
-3. 名字标准化（Rubysilver Ore 等）
-4. 多维信号（趋势/斜率/位置/动量/波动率）+ SQLite 长期存储
-5. 依赖：requests + numpy（见 requirements.txt）
-6. 【新增】自动发现粉末、稀有炼金耗材等第二、三梯队物品，按品质隔离
+核心功能：
+1. 14 个硬编码目标（原 8 个 + 6 个精选二梯队），不再自动发现
+2. 所有物品先经 resolve_archetype_id() 拿到真实 item_id
+3. /v2/market 兜底函数容错 + DEBUG 日志
+4. 名字标准化（Rubysilver Ore 等）
+5. 多维信号（趋势/斜率/位置/动量/波动率）+ SQLite 长期存储
+6. 依赖：requests + numpy（见 requirements.txt）
+7. OpenRouter AI 分析 + Server酱推送 + Git 提交
 """
 import os
 import json
@@ -50,8 +51,9 @@ SLOPE_THRESHOLD = 0.5    # 均线斜率阈值（%/天）
 VOLATILITY_PENALTY = 15  # 波动率惩罚阈值（%）
 CONFIDENCE_THRESHOLD = 0.5
 
-# ===== WATCHLIST（名字标准化，用裸名 + rarity 区分品质）=====
+# ===== WATCHLIST（硬编码，一劳永逸）=====
 WATCHLIST = [
+    # ---- 原 8 个核心目标 ----
     ("Troll Pelt", "epic", 0.12),
     ("Troll's Blood", "epic", 0.12),
     ("Ruby", "legendary", 0.15),
@@ -60,23 +62,15 @@ WATCHLIST = [
     ("Rubysilver Ore", "epic", 0.15),
     ("Gold Ore", "epic", 0.20),
     ("Diamond", "legendary", 0.20),
-]
 
-# === NEW: 自动发现关键词种子（第二、三梯队） ===
-DISCOVERY_KEYWORDS = [
-    # 粉末类
-    "Powder", "Brimstone", "Froststone", "Obsidian", "Tidestone", "Gold", "Rubysilver", "Cobalt",
-    # 稀有炼金耗材
-    "Troll Pelt", "Troll's Blood", "Demon Blood", "Volcanic Ash", "Frozen Heart",
-    "Wardweed", "Lifeleaf", "Saltvine", "Ghostdust", "Bone", "Intact Skull",
-    "Arcane Essence", "Magma Essence", "Jellyfish Glow Essence",
-    "Breath of the Deceased", "Broken War Horn",
-    # 皇家宝石（补充）
-    "Ruby (Royal)", "Blue Sapphire (Royal)", "Diamond (Royal)", "Diamond (Exquisite)",
-    # 金币容器（补充）
-    "Coin Bag", "Coin Pouch", "Coin Purse", "Coin Chest", "Spectral Coinbag",
+    # ---- 手动精选的第二、三梯队（均价≥600，非装备）----
+    ("Arcane Essence", "legendary", 0.15),
+    ("Arcane Essence", "unique", 0.15),
+    ("Gold Coin Bag", "unique", 0.15),
+    ("Gold Coin Pouch", "unique", 0.15),
+    ("Gold Coin Chest", "unique", 0.15),
+    ("Spectral Coinbag", "unique", 0.15),
 ]
-# ================================================
 
 ACCOUNT_STATE_FILE = "account_state.json"
 
@@ -463,18 +457,6 @@ def simple_signal(price, hist_avg, min_margin):
     else:
         return "HOLD", profit_margin, f"偏离{dev:+.1f}%"
 
-# ===== memory 辅助 =====
-def load_memory():
-    if os.path.exists("price_memory.json"):
-        try:
-            return json.load(open("price_memory.json", encoding="utf-8"))
-        except Exception:
-            pass
-    return {}
-
-def save_memory(mem):
-    json.dump(mem, open("price_memory.json", "w", encoding="utf-8"), ensure_ascii=False, indent=2)
-
 # ===== AI 分析 =====
 def _try_fix_json(text):
     if text.count('"') % 2 != 0:
@@ -620,39 +602,6 @@ def build_basic_report(current_data, fallback_used, skipped):
         lines.append(f"\n⚠️ 跳过 {len(skipped)} 个: {', '.join(skipped)}")
     return "\n".join(lines)
 
-# ===== 【NEW】自动发现第二、三梯队物品 =====
-def discover_materials():
-    discovered = {}  # key: (name, rarity) -> item_id
-    print("\n🔍 自动发现第二、三梯队材料...")
-    for kw in DISCOVERY_KEYWORDS:
-        time.sleep(0.3)
-        r = safe_get(f"{API_BASE}/items", {"name": kw, "limit": 10})
-        if not r or r.status_code != 200:
-            continue
-        data = r.json()
-        body = data.get("body")
-        if isinstance(body, list):
-            items = body
-        elif isinstance(body, dict):
-            items = body.get("results", [])
-        else:
-            items = []
-        for item in items:
-            name = item.get("name")
-            rarity = item.get("rarity")
-            item_id = item.get("id")
-            item_type = item.get("item_type")
-            if item_type in {"Weapon", "Armor", "Accessory"}:
-                continue
-            if name and rarity and item_id:
-                key = (name, rarity)
-                if key not in discovered:
-                    discovered[key] = item_id
-                    print(f"  + 发现: {name}|{rarity} (ID: {item_id})")
-    result = [(name, rarity, item_id) for (name, rarity), item_id in discovered.items()]
-    print(f"  📋 自动发现 {len(result)} 个新目标")
-    return result
-
 # ===== 主流程 =====
 def main():
     print(f"🚀 DarkerDB AI Trader 启动（长期趋势版，窗口={HISTORY_DAYS}天）...")
@@ -669,20 +618,6 @@ def main():
     print(f"⏰ 当前时间戳: {timestamp_str}")
 
     mem = load_memory()
-
-    # 合并自动发现的物品到 WATCHLIST
-    global WATCHLIST
-    existing_keys = {(name, rarity) for name, rarity, _ in WATCHLIST}
-    new_items = discover_materials()
-    for name, rarity, item_id in new_items:
-        if (name, rarity) not in existing_keys:
-            WATCHLIST.append((name, rarity, 0.15))
-            existing_keys.add((name, rarity))
-            ck_id = f"__exact_id__{name}|{rarity}"
-            mem[ck_id] = item_id
-    save_memory(mem)
-    print(f"📋 总监控目标: {len(WATCHLIST)} 个 (含自动发现)")
-
     current_data, skipped, fallback_used = [], [], []
 
     for name, rarity, min_margin in WATCHLIST:
@@ -812,6 +747,18 @@ def main():
                 subprocess.run(["git", "push", "--force", "origin", "main"], capture_output=True)
     except Exception as e:
         print(f"⚠️ Git 操作异常: {e}")
+
+# ===== 辅助：memory（用于缓存 item_id）=====
+def load_memory():
+    if os.path.exists("price_memory.json"):
+        try:
+            return json.load(open("price_memory.json", encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+def save_memory(mem):
+    json.dump(mem, open("price_memory.json", "w", encoding="utf-8"), ensure_ascii=False, indent=2)
 
 if __name__ == "__main__":
     main()
