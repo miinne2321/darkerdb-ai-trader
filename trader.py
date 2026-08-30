@@ -1,14 +1,10 @@
 """
-DarkerDB AI Trader - 长期趋势版（最终定稿版）
+DarkerDB AI Trader - 长期趋势版（最终定稿版 v3）
 ============================================
-核心功能：
-1. 14 个硬编码目标（原 8 个 + 6 个精选二梯队），不再自动发现
-2. 所有物品先经 resolve_archetype_id() 拿到真实 item_id
-3. /v2/market 兜底函数容错 + DEBUG 日志
-4. 名字标准化（Rubysilver Ore 等）
-5. 多维信号（趋势/斜率/位置/动量/波动率）+ SQLite 长期存储
-6. 依赖：requests + numpy（见 requirements.txt）
-7. OpenRouter AI 分析 + Server酱推送 + Git 提交
+- 14 个原核心目标 + 6 个高价值粉末 = 20 个监控物品
+- 所有物品先经 resolve_archetype_id() 拿到真实 item_id
+- /v2/market 兜底 + 多维信号 + SQLite 长期存储
+- OpenRouter AI 分析 + Server酱推送 + Git 提交
 """
 import os
 import json
@@ -34,8 +30,8 @@ SERVERCHAN_SENDKEY = os.environ.get("SERVERCHAN_SENDKEY", "")
 API_BASE = "https://api.darkerdb.com/v2"
 
 # ===== 长期历史配置 =====
-HISTORY_DAYS = 90          # 分析时使用多少天的历史数据
-DATA_RETENTION_DAYS = 365  # SQLite 中保留多少天的原始数据
+HISTORY_DAYS = 90
+DATA_RETENTION_DAYS = 365
 DB_FILE = "price_history.db"
 
 # ===== 信号/采样配置 =====
@@ -44,11 +40,10 @@ LISTING_WINDOW_HOURS = 6
 SALE_WINDOW_HOURS = 24
 DEBUG = True
 
-# 多维信号参数
 SHORT_WINDOW = 7
 LONG_WINDOW = 30
-SLOPE_THRESHOLD = 0.5    # 均线斜率阈值（%/天）
-VOLATILITY_PENALTY = 15  # 波动率惩罚阈值（%）
+SLOPE_THRESHOLD = 0.5
+VOLATILITY_PENALTY = 15
 CONFIDENCE_THRESHOLD = 0.5
 
 # ===== WATCHLIST（硬编码，一劳永逸）=====
@@ -63,13 +58,21 @@ WATCHLIST = [
     ("Gold Ore", "epic", 0.20),
     ("Diamond", "legendary", 0.20),
 
-    # ---- 手动精选的第二、三梯队（均价≥600，非装备）----
+    # ---- 第二梯队：高价值非装备（≥600）----
     ("Arcane Essence", "legendary", 0.15),
     ("Arcane Essence", "unique", 0.15),
     ("Gold Coin Bag", "unique", 0.15),
     ("Gold Coin Pouch", "unique", 0.15),
     ("Gold Coin Chest", "unique", 0.15),
     ("Spectral Coinbag", "unique", 0.15),
+
+    # ---- 第三梯队：高价值粉末（epic，市场价≥600）----
+    ("Obsidian Powder", "epic", 0.15),
+    ("Rubysilver Powder", "epic", 0.15),
+    ("Froststone Powder", "epic", 0.15),
+    ("Tidestone Powder", "epic", 0.15),
+    ("Brimstone Powder", "epic", 0.15),
+    ("Gold Powder", "epic", 0.15),
 ]
 
 ACCOUNT_STATE_FILE = "account_state.json"
@@ -103,7 +106,6 @@ def save_price_to_db(item, rarity, price, timestamp):
         conn.close()
 
 def get_price_series(item, rarity, days=HISTORY_DAYS):
-    """取出最近 days 天的原始价格序列，按时间升序"""
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     conn = sqlite3.connect(DB_FILE)
     rows = conn.execute(
@@ -194,7 +196,6 @@ def norm(s):
 
 # ===== 核心：真实 item_id 解析 =====
 def resolve_archetype_id(name):
-    """通过搜索 API 获取真实的规范 item_id"""
     r = safe_get(f"{API_BASE}/search", {"q": name, "limit": 5})
     if not r or r.status_code != 200:
         return None
@@ -202,7 +203,6 @@ def resolve_archetype_id(name):
     body = data.get("body", {})
     results = body.get("results", []) if isinstance(body, dict) else []
     name_n = norm(name)
-    # 优先精确匹配
     for item in results:
         if not isinstance(item, dict) or item.get("type") != "item":
             continue
@@ -211,7 +211,6 @@ def resolve_archetype_id(name):
             if DEBUG:
                 print(f"    [DEBUG] archetype_id for '{name}': {found} (精确匹配)")
             return found
-    # 其次包含匹配
     for item in results:
         if not isinstance(item, dict) or item.get("type") != "item":
             continue
@@ -227,7 +226,6 @@ def resolve_archetype_id(name):
 
 # ===== 价格获取 =====
 def get_fresh_price_checks(item_id, rarity):
-    """查 /v2/price-checks，必须用真实的 item_id"""
     if not item_id:
         return None
     params = {"item_id": item_id, "rarity": rarity}
@@ -284,7 +282,6 @@ def get_fresh_price_checks(item_id, rarity):
     }
 
 def get_price_from_market_fallback(archetype_id, rarity):
-    """从 /v2/market 兜底取价（容错版）"""
     if not archetype_id:
         if DEBUG:
             print("    [DEBUG] market 兜底跳过：archetype_id 为空")
@@ -340,7 +337,6 @@ def get_price_from_market_fallback(archetype_id, rarity):
     }
 
 def fetch_price(name, rarity):
-    """完整流程：搜索拿真实 ID -> price-checks -> market 兜底"""
     archetype_id = resolve_archetype_id(name)
     if not archetype_id:
         return None, None
@@ -602,6 +598,18 @@ def build_basic_report(current_data, fallback_used, skipped):
         lines.append(f"\n⚠️ 跳过 {len(skipped)} 个: {', '.join(skipped)}")
     return "\n".join(lines)
 
+# ===== memory 辅助 =====
+def load_memory():
+    if os.path.exists("price_memory.json"):
+        try:
+            return json.load(open("price_memory.json", encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+def save_memory(mem):
+    json.dump(mem, open("price_memory.json", "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+
 # ===== 主流程 =====
 def main():
     print(f"🚀 DarkerDB AI Trader 启动（长期趋势版，窗口={HISTORY_DAYS}天）...")
@@ -609,6 +617,7 @@ def main():
         print("❌ 未配置 DARKERDB_KEYS，退出")
         return
     print(f"📋 已配置 {len(DARKERDB_KEYS)} 个 DarkerDB 账号")
+    print(f"📋 监控目标: {len(WATCHLIST)} 个")
 
     init_db()
     clean_old_data()
@@ -747,18 +756,6 @@ def main():
                 subprocess.run(["git", "push", "--force", "origin", "main"], capture_output=True)
     except Exception as e:
         print(f"⚠️ Git 操作异常: {e}")
-
-# ===== 辅助：memory（用于缓存 item_id）=====
-def load_memory():
-    if os.path.exists("price_memory.json"):
-        try:
-            return json.load(open("price_memory.json", encoding="utf-8"))
-        except Exception:
-            pass
-    return {}
-
-def save_memory(mem):
-    json.dump(mem, open("price_memory.json", "w", encoding="utf-8"), ensure_ascii=False, indent=2)
 
 if __name__ == "__main__":
     main()
