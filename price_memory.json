@@ -1236,5 +1236,7 @@
   "__arch_id__Gold Coin Pouch": "id.item.gold_coin_pouch",
   "__arch_id__Gold Coin Purse": "id.item.gold_coin_purse",
   "__arch_id__Gold Coin Chest": "id.item.gold_coin_chest",
-  "__arch_id__Spectral Coinbag": "id.item.spectral_coinbag"
+  "__arch_id__Spectral Coinbag": "id.item.spectral_coinbag",
+  "__arch_id__Brimstone Powder": "id.item.brimstone_powder",
+  "__exact_id__Brimstone Powder|epic": "id.item.brimstone_powder"
 }
